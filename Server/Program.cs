@@ -157,6 +157,15 @@ app.MapPost("/rooms/{code}/ready", async (string code, HttpContext context, Room
         : Results.BadRequest("Invalid room or player.");
 });
 
+app.MapPost("/rooms/{code}/leave", (string code, HttpContext context, RoomStore rooms, AuthTokenStore tokens) =>
+{
+    var player = RequirePlayer(context, tokens);
+    if (player == null) return Results.Unauthorized();
+    return rooms.Leave(code, player.Id)
+        ? Results.Ok(new { status = "left" })
+        : Results.BadRequest(new { error = "No se puede salir de esta mesa en este momento." });
+});
+
 app.MapPost("/rooms/{code}/start", async (string code, HttpContext context, RoomStore rooms, AuthTokenStore tokens, IHubContext<GameHub> hub) =>
 {
     var player = RequirePlayer(context, tokens);
@@ -398,6 +407,16 @@ sealed class RoomStore
         var room = Get(code);
         return room != null && room.Start(playerId) ? room : null;
     }
+
+    public bool Leave(string code, string playerId)
+    {
+        var normalizedCode = code.ToUpperInvariant();
+        var room = Get(normalizedCode);
+        if (room == null || !room.TryLeave(playerId)) return false;
+        if (room.HostId != playerId) return true;
+        return ((ICollection<KeyValuePair<string, Room>>)rooms)
+            .Remove(new KeyValuePair<string, Room>(normalizedCode, room));
+    }
 }
 
 sealed class Room
@@ -457,6 +476,18 @@ sealed class Room
             var player = Players.FirstOrDefault(p => p.Id == playerId);
             if (player == null || State != "lobby") return false;
             player.Ready = !player.Ready;
+            return true;
+        }
+    }
+
+    public bool TryLeave(string playerId)
+    {
+        lock (gate)
+        {
+            if (State != "lobby") return false;
+            var player = Players.FirstOrDefault(p => p.Id == playerId);
+            if (player == null) return false;
+            if (playerId != HostId) Players.Remove(player);
             return true;
         }
     }

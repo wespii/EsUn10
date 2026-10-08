@@ -23,7 +23,7 @@ El plan gratuito duerme el servicio tras 15 minutos sin tráfico y el primer acc
 
 ## API de juego
 
-- `POST /rooms`, `POST /rooms/{code}/join`, `GET /rooms/{code}`
+- `POST /rooms`, `POST /rooms/{code}/join`, `POST /rooms/{code}/leave`, `GET /rooms/{code}`
 - `POST /rooms/{code}/ready`, `POST /rooms/{code}/start`
 - `POST /rooms/{code}/guess` con `{ "number": 1 }`
 - `POST /rooms/{code}/clue` con `{ "text": "..." }`
