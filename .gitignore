@@ -8,6 +8,7 @@
 .idea/
 .junie/
 MemoryCaptures/
+/.local-keys/
 /Server/bin/
 /Server/obj/
 /Server/.local-keys/
