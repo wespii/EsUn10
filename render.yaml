@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: es-un-10-pero
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Server/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - key: ASPNETCORE_ENVIRONMENT
+        value: Production
+      - key: Discord__ClientId
+        sync: false
+      - key: Discord__ClientSecret
+        sync: false
+      - key: Discord__RedirectUri
+        sync: false
