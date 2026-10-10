@@ -16,6 +16,10 @@ La versión multijugador actual es la web servida por `Server/`. `Assets/` conse
 
 **Reparto:** los números del 1 al 10 se barajan y se reparten sin repetirse hasta agotar la baraja. Al volver a mezclar no se repite inmediatamente la última carta. La baraja continúa entre revanchas de la misma mesa.
 
+## Apariencia
+
+El botón de sol/luna en la cabecera alterna entre modo claro y oscuro. La elección se guarda en ese navegador y se aplica antes de dibujar la página. Si aún no has elegido, se usa la preferencia del sistema.
+
 ## Recuperación y conexiones
 
 - Recargar vuelve a la misma mesa con la misma identidad. El código se guarda en el navegador, nunca el número secreto ni credenciales de Discord.
