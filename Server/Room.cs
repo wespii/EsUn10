@@ -14,6 +14,7 @@ sealed class Room
     private readonly Queue<int> numberDeck = new();
     private HintCard? previousHint;
     private int activeIndex, secret, round = 1, hintsUsed;
+    private int turnSeconds = 90, targetScore;
     private long version = 1;
     private DateTimeOffset turnStartedAt, lastHintAt = DateTimeOffset.MinValue;
     private DateTimeOffset? countdownEndsAt, revealEndsAt;
@@ -60,6 +61,22 @@ sealed class Room
             if (state != "lobby" || !Touch(id)) return false;
             var p = players.First(p => p.Id == id); p.Ready = !p.Ready;
             UpdateCountdown(); version++; return true;
+        }
+    }
+    public GameAction Configure(string id, int seconds, int points)
+    {
+        lock (gate)
+        {
+            Tick();
+            if (state != "lobby" || id != HostId || !ContainsPlayer(id))
+                return new(false, "Solo el anfitrión puede configurar la mesa antes de empezar.");
+            if (seconds is < 30 or > 300 || points is < 0 or > 100)
+                return new(false, "El tiempo debe estar entre 30 y 300 segundos y la meta entre 1 y 100 puntos (0 para tres vueltas).");
+            if (turnSeconds == seconds && targetScore == points) return new(true, "Ajustes guardados.");
+            turnSeconds = seconds; targetScore = points; countdownEndsAt = null;
+            foreach (var player in players) player.Ready = false;
+            Touch(id); version++;
+            return new(true, "Ajustes guardados. Todos deben volver a marcarse listos.");
         }
     }
     public bool TryLeave(string id)
@@ -123,7 +140,7 @@ sealed class Room
             if (state == "playing")
             {
                 if (Now - players[activeIndex].LastSeen >= TimeSpan.FromSeconds(60)) Reveal("No volvió a tiempo. Turno omitido.", 0);
-                else if (Now >= turnStartedAt.AddSeconds(90)) Reveal("Se acabó el tiempo.", 0);
+                else if (Now >= turnStartedAt.AddSeconds(turnSeconds)) Reveal("Se acabó el tiempo.", 0);
             }
             if (state == "reveal" && revealEndsAt <= Now) NextTurn();
         }
@@ -163,11 +180,13 @@ sealed class Room
     }
     private void NextTurn()
     {
+        var winner = players.FirstOrDefault(p => !p.Left && targetScore > 0 && p.Score >= targetScore);
+        if (winner != null) { Finish($"¡{winner.DisplayName} alcanzó la meta de {targetScore} puntos!"); return; }
         do
         {
             activeIndex++;
             if (activeIndex >= players.Count) { activeIndex = 0; round++; }
-            if (round > 3) { Finish("¡Partida terminada! Tres vueltas completas."); return; }
+            if (targetScore == 0 && round > 3) { Finish("¡Partida terminada! Tres vueltas completas."); return; }
         } while (players[activeIndex].Left || Now - players[activeIndex].LastSeen >= TimeSpan.FromSeconds(60));
         BeginTurn();
     }
@@ -252,10 +271,11 @@ sealed class Room
             Tick();
             var active = state is "playing" or "reveal" ? players[activeIndex].Id : null;
             return new {
-                code = Code, state, version, serverTime = Now, hostId = HostId, round = Math.Min(round, 3), totalRounds = 3,
+                code = Code, state, version, serverTime = Now, hostId = HostId, round = targetScore == 0 ? Math.Min(round, 3) : round, totalRounds = targetScore == 0 ? (int?)3 : null,
+                settings = new { turnSeconds, targetScore },
                 turnId, countdownEndsAt, revealEndsAt, activePlayerId = active, viewerIsGuesser = viewerId == active,
                 guessesRemaining = 3 - tried.Count, triedNumbers = tried.ToArray(), turnStartedAt,
-                deadline = state == "playing" ? turnStartedAt.AddSeconds(90) : (DateTimeOffset?)null,
+                deadline = state == "playing" ? turnStartedAt.AddSeconds(turnSeconds) : (DateTimeOffset?)null,
                 secretNumber = state == "reveal" || (state == "playing" && viewerId != active) ? (int?)secret : null,
                 lastResult = result, clues = clues.ToArray(), hintsRemaining = 3 - hintsUsed,
                 nextHintAt = lastHintAt == DateTimeOffset.MinValue ? (DateTimeOffset?)null : lastHintAt.AddSeconds(8),

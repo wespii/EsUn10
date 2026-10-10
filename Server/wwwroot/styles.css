@@ -55,3 +55,4 @@
     .header-tools #connection{grid-row:2;grid-column:2 / span 2;justify-self:end}
     .header-tools :is(#profile,#connection):empty{display:none}
 }
+.lobby-settings{border:1px solid #b7c9bb;border-radius:12px;padding:10px 14px;margin:12px 0;font-size:12px}.lobby-settings summary{cursor:pointer;font-weight:700;color:var(--ink)}.lobby-settings form{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;align-items:end;margin-top:12px}.lobby-settings label{display:flex;flex-direction:column;gap:6px;font-weight:600;min-width:0}.lobby-settings .input{width:100%;padding:8px;font-size:13px}.lobby-settings .button{font-size:12px;padding:10px}.lobby-settings .note{margin:12px 0 0}[data-theme="dark"] .lobby-settings{border-color:var(--theme-border)}@media(max-width:720px){.lobby-settings form{grid-template-columns:1fr 1fr}.lobby-settings{margin:8px 0;padding:8px 10px}.lobby-settings summary{font-size:11px}}

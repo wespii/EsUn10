@@ -7,10 +7,10 @@ La versión multijugador actual es la web servida por `Server/`. `Assets/` conse
 
 1. Vincula Discord. El navegador recuerda la sesión; puedes cerrarla desde la cabecera.
 2. Crea una mesa o entra con su código.
-3. Cuando todos están listos empieza una cuenta atrás de 10 segundos, con sonido opcional.
-4. Quien adivina tiene 90 segundos y tres intentos distintos. Los demás ven la carta y dan pistas por una llamada externa o por el chat.
+3. El anfitrión puede configurar el tiempo para adivinar (30–300 segundos) y elegir entre tres vueltas o una meta de 1–100 puntos. Cambiar los ajustes desmarca a todos; quedan bloqueados al empezar. Cuando todos están listos empieza una cuenta atrás de 10 segundos, con sonido opcional.
+4. Quien adivina tiene el tiempo configurado (90 segundos por defecto) y tres intentos distintos. Los demás ven la carta y dan pistas por una llamada externa o por el chat.
 5. «Dame una pista» envía una frase de categoría aleatoria, adecuada al número. Hay tres ayudas compartidas por turno, separadas por ocho segundos.
-6. Se revela la carta durante cuatro segundos, incluso al agotarse el tiempo. Tras tres vueltas completas hay clasificación y revancha.
+6. Se revela la carta durante cuatro segundos, incluso al agotarse el tiempo. La partida termina tras tres vueltas o al alcanzar la meta elegida; después hay clasificación y revancha. La revancha conserva los ajustes, que el anfitrión puede cambiar en el lobby.
 
 **Puntuación:** acertar da 3 puntos en cualquier intento. Solo al gastar los tres intentos se evalúa el último: si queda a una unidad por arriba o abajo, da 2 puntos; a dos unidades, da 1; más lejos, 0. El tiempo agotado da 0.
 

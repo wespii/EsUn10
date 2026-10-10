@@ -20,6 +20,7 @@ Las mesas son temporales: se pierden al reiniciar el proceso. No se promete pers
 
 - `GET /auth/me`, `GET /auth/discord`, `POST /auth/logout`
 - `POST /rooms`, `GET /rooms/{code}`, `POST /rooms/{code}/join`
+- `POST /rooms/{code}/settings`: `{ "turnSeconds": 90, "targetScore": 10 }`. Solo el anfitrión y en lobby; 30–300 segundos, 1–100 puntos, o `targetScore: 0` para tres vueltas. Un cambio cancela la cuenta atrás y desmarca a todos. La meta termina tras la revelación del turno que la alcanza.
 - `POST /rooms/{code}/ready`, `POST /rooms/{code}/leave`, `POST /rooms/{code}/rematch`
 - `POST /rooms/{code}/guess`: `{ "number": 7, "turnId": "…", "requestId": "UUID" }`
 - `POST /rooms/{code}/clue`: `{ "text": "…", "turnId": "…" }`

@@ -228,6 +228,16 @@ app.MapPost("/rooms/{code}/hint", async (string code, TurnRequest request, HttpC
     return Results.Ok(new { suggestion = action.Message, room = room.ToView(player.Id) });
 }).RequireRateLimiting("api");
 
+app.MapPost("/rooms/{code}/settings", async (string code, RoomSettingsRequest request, HttpContext context, RoomStore rooms, AuthTokenStore tokens, IHubContext<GameHub> hub) => {
+    var player = RequirePlayer(context, tokens);
+    if (player == null) return Results.Unauthorized();
+    var room = rooms.Get(code);
+    if (room == null || !room.ContainsPlayer(player.Id)) return Results.NotFound();
+    var result = room.Configure(player.Id, request.TurnSeconds, request.TargetScore);
+    if (!result.Accepted) return Results.BadRequest(new { error = result.Message });
+    return await NotifyRoom(hub, room, player.Id);
+}).RequireRateLimiting("api");
+
 app.MapPost("/rooms/{code}/rematch", async (string code, HttpContext context, RoomStore rooms, AuthTokenStore tokens, IHubContext<GameHub> hub) => {
     var player = RequirePlayer(context, tokens);
     if (player == null) return Results.Unauthorized();
@@ -349,6 +359,7 @@ sealed class GameHub(AuthTokenStore tokens, RoomStore rooms) : Hub
     }
 }
 
+record RoomSettingsRequest(int TurnSeconds, int TargetScore);
 record GuessRequest(int Number, string? TurnId, string? RequestId);
 record ClueRequest(string? Text, string? TurnId);
 record TurnRequest(string? TurnId);

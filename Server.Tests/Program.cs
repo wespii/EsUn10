@@ -77,6 +77,18 @@ var tests = new Dictionary<string,Action> {
     for(var i=0;i<dealt.Count;i+=10)Check(dealt.Skip(i).Take(10).Distinct().Count()==10,"every deck contains each value exactly once");
     for(var i=1;i<dealt.Count;i++)Check(dealt[i]!=dealt[i-1],"no immediate repetition including deck boundaries");
 },
+["host settings, ready reset, deadlines, goal victory and rematch"] = () => {
+    var c=new FakeClock();var r=new Room("555555",new("a","Ana",null),c);r.TryAdd(new("b","Ben",null),4);
+    Check(!r.Configure("b",30,5).Accepted,"guest cannot configure");Check(!r.Configure("x",30,5).Accepted,"outsider cannot configure");
+    foreach(var invalid in new[]{(29,5),(301,5),(90,-1),(90,101)})Check(!r.Configure("a",invalid.Item1,invalid.Item2).Accepted,"invalid bounds rejected");
+    r.SetReady("a");r.SetReady("b");Check(r.Configure("a",30,3).Accepted,"host configures countdown");Check(View(r).GetProperty("countdownEndsAt").ValueKind==JsonValueKind.Null,"settings cancel countdown");Check(View(r).GetProperty("players").EnumerateArray().All(p=>!p.GetProperty("ready").GetBoolean()),"settings clear readiness");
+    r.SetReady("a");r.SetReady("b");Move(c,r,10,"a","b");var view=View(r);
+    Check((view.GetProperty("deadline").GetDateTimeOffset()-view.GetProperty("turnStartedAt").GetDateTimeOffset()).TotalSeconds==30,"configured deadline");Check(!r.Configure("a",300,100).Accepted,"settings frozen during game");
+    var secret=View(r,"b").GetProperty("secretNumber").GetInt32();r.Guess("a",secret,Turn(r),Guid.NewGuid().ToString());Check(State(r)=="reveal","winner still gets reveal");Move(c,r,4,"a","b");Check(State(r)=="finished","target finishes early");Check(r.Rematch("a"),"rematch allowed");Check(View(r).GetProperty("settings").GetProperty("turnSeconds").GetInt32()==30,"rematch retains settings");
+    Check(r.Configure("a",300,100).Accepted,"new settings before rematch");r.SetReady("a");r.SetReady("b");Move(c,r,10,"a","b");
+    Move(c,r,90,"a","b");Check(State(r)=="playing","longer time respected");Move(c,r,210,"a","b");Check(State(r)=="reveal","longer time expires");Move(c,r,4,"a","b");
+    for(var i=1;i<6;i++){Move(c,r,300,"a","b");Move(c,r,4,"a","b");}Check(State(r)=="playing"&&View(r).GetProperty("round").GetInt32()==4,"target mode continues beyond three rounds");
+},
 ["remembered login survives a new server and rejects tampering"] = () => {
     var config=new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?>{{"Discord:ClientSecret","test-only-key-not-a-real-discord-secret"}}).Build();
     var remembered=new RememberLogin(config,new TestEnvironment());var original=new DefaultHttpContext();original.Session=new TestSession();remembered.Issue(original,new("u123","Test",null));
