@@ -11,6 +11,7 @@ sealed class Room
     private readonly HashSet<string> requests = new();
     private readonly List<int> turnHints = new();
     private readonly HashSet<string> feedbackVoters = new();
+    private readonly Queue<int> numberDeck = new();
     private HintCard? previousHint;
     private int activeIndex, secret, round = 1, hintsUsed;
     private long version = 1;
@@ -129,9 +130,30 @@ sealed class Room
     }
     private void BeginTurn()
     {
-        state = "playing"; turnId = Guid.NewGuid().ToString("N"); secret = RandomNumberGenerator.GetInt32(1, 11);
+        state = "playing"; turnId = Guid.NewGuid().ToString("N"); secret = DrawNumber();
         turnStartedAt = Now; revealEndsAt = null; result = ""; hintsUsed = 0; lastHintAt = DateTimeOffset.MinValue;
         tried.Clear(); requests.Clear(); clues.Clear(); turnHints.Clear(); feedbackVoters.Clear(); version++;
+    }
+    private int DrawNumber()
+    {
+        // Keep the deck across rematches. Each batch uses all ten numbers once.
+        if (numberDeck.Count == 0)
+        {
+            var numbers = Enumerable.Range(1, 10).ToArray();
+            for (var i = numbers.Length - 1; i > 0; i--)
+            {
+                var j = RandomNumberGenerator.GetInt32(i + 1);
+                (numbers[i], numbers[j]) = (numbers[j], numbers[i]);
+            }
+            // Avoid repeating the last card at the boundary between two decks.
+            if (numbers[0] == secret)
+            {
+                var j = RandomNumberGenerator.GetInt32(1, numbers.Length);
+                (numbers[0], numbers[j]) = (numbers[j], numbers[0]);
+            }
+            foreach (var number in numbers) numberDeck.Enqueue(number);
+        }
+        return numberDeck.Dequeue();
     }
     private void Reveal(string message, int points)
     {
@@ -171,7 +193,11 @@ sealed class Room
             if (number is < 1 or > 10 || !Guid.TryParse(requestId, out _)) return new(false, "Intento no válido.");
             if (requests.Contains(requestId!) || tried.Contains(number)) return new(false, "Ese intento ya se procesó. Elige otro número.");
             requests.Add(requestId!); tried.Add(number);
-            if (number == secret || tried.Count == 3) Reveal(number == secret ? "¡Correcto!" : "Se agotaron los intentos.", number == secret ? 3 : Math.Abs(secret - number) == 1 ? 1 : 0);
+            if (number == secret || tried.Count == 3)
+            {
+                var points = Math.Abs(secret - number) switch { 0 => 3, 1 => 2, 2 => 1, _ => 0 };
+                Reveal(number == secret ? "¡Correcto!" : "Se agotaron los intentos.", points);
+            }
             else { result = $"No era {number}. Quedan {3 - tried.Count} intentos."; version++; }
             return new(true, result);
         }

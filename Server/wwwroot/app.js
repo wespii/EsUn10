@@ -5,7 +5,7 @@ let busy=false,connection=null,connecting=false,retryTimer=null,retryDelay=1000;
 let refreshing=false,refreshAgain=false,generation=0,serverOffset=0,renderKey='',clueCount=0;
 const savedKey='esun10.room';
 const serverNow=()=>Date.now()+serverOffset;
-const rules='3 vueltas · 90 s · 3 intentos. Acierto: +3. Si tu último intento queda a un número: +1. Resto: 0.';
+const rules='3 vueltas · 90 s · 3 intentos. Acierto: +3. Al gastar los 3 intentos: a ±1, +2; a ±2, +1. Resto: 0.';
 function savedRoom(){try{return localStorage.getItem(savedKey)||''}catch{return ''}}
 function saveRoom(code){try{if(code)localStorage.setItem(savedKey,code);else localStorage.removeItem(savedKey)}catch{}}
 function connectionStatus(text){document.querySelector('#connection').textContent=text}

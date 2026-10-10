@@ -27,6 +27,8 @@ Las mesas son temporales: se pierden al reiniciar el proceso. No se promete pers
 - `POST /rooms/{code}/hint-rating`: `{ "turnId": "…", "helpful": true }`; solo el adivinador y durante la revelación, una vez.
 - `GET /health`: salud e identificador de instancia; no expone datos de las mesas.
 
+El reparto usa una baraja aleatoria del 1 al 10 sin reposición, conservada entre revanchas. Al remezclar evita repetir inmediatamente la carta anterior. Los puntos son 3 por acierto; tras el tercer fallo, 2 si el último número queda a ±1, 1 si queda a ±2 y 0 en el resto. El tiempo agotado da 0.
+
 Los estados son `lobby`, `playing`, `reveal` y `finished`. Cada vista incluye una versión creciente y la hora del servidor. La web descarta respuestas antiguas y ajusta su reloj.
 
 ## Tiempo real y límites

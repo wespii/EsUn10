@@ -12,7 +12,9 @@ La versión multijugador actual es la web servida por `Server/`. `Assets/` conse
 5. «Dame una pista» envía una frase de categoría aleatoria, adecuada al número. Hay tres ayudas compartidas por turno, separadas por ocho segundos.
 6. Se revela la carta durante cuatro segundos, incluso al agotarse el tiempo. Tras tres vueltas completas hay clasificación y revancha.
 
-**Puntuación:** acertar da 3 puntos. Si el tercer y último intento queda a una unidad, da 1 punto; los demás resultados dan 0. El tiempo agotado da 0.
+**Puntuación:** acertar da 3 puntos en cualquier intento. Solo al gastar los tres intentos se evalúa el último: si queda a una unidad por arriba o abajo, da 2 puntos; a dos unidades, da 1; más lejos, 0. El tiempo agotado da 0.
+
+**Reparto:** los números del 1 al 10 se barajan y se reparten sin repetirse hasta agotar la baraja. Al volver a mezclar no se repite inmediatamente la última carta. La baraja continúa entre revanchas de la misma mesa.
 
 ## Recuperación y conexiones
 
