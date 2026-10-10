@@ -22,3 +22,6 @@ MemoryCaptures/
 *.userprefs
 *.iml
 Server/appsettings.json
+!Server.Tests/Server.Tests.csproj
+Server.Tests/bin/
+Server.Tests/obj/

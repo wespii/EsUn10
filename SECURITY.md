@@ -1,34 +1,21 @@
-# Seguridad del prototipo
+# Seguridad y límites
 
-## Estado actual
+## Versión online
 
-Este prototipo funciona completamente dentro del cliente Unity. Por ello, el número secreto está oculto en la interfaz, pero sigue existiendo en la memoria del proceso local. Una persona con acceso al cliente puede inspeccionarlo o modificarlo. Esto es una limitación inevitable del modo offline y no debe considerarse una protección antitrampas.
+El servidor genera y conserva la carta. La vista del adivinador omite el número mientras juega y lo revela al terminar el turno. Los eventos SignalR solo notifican cambios: nunca difunden una vista privada al grupo. Cada acción comprueba identidad, pertenencia, fase y turno. Las adivinanzas duplicadas y los números repetidos no consumen intentos.
 
-El script aplica validaciones básicas para evitar estados inválidos:
+Hay límites de solicitudes, ayudas y mensajes, y caducidad de salas, tokens y solicitudes de login de dispositivos. Los nombres y pistas se insertan como texto o se escapan antes de mostrarse. No publiques credenciales, archivos de configuración locales, claves de protección de datos ni salidas de compilación.
 
-- Solo se aceptan números del 1 al 10.
-- Solo el jugador local activo puede enviar una adivinanza o pista.
-- Las pistas se recortan a 120 caracteres.
-- Se ignoran acciones cuando no hay una partida activa.
-- Los turnos simulados se resuelven internamente y no aceptan entradas del usuario.
+## Discord y sesión recordada
 
-## Reglas para la versión online
+OAuth solicita únicamente `identify`, valida `state` y mantiene el secreto de la aplicación en el servidor. Una cookie `HttpOnly`, `Secure` en producción y `SameSite=Lax` conserva la identidad del navegador. Se firma con HMAC-SHA256 y una clave derivada del secreto de Discord con un propósito específico; el secreto y los tokens OAuth nunca se incluyen en ella.
 
-La versión multijugador debe usar un servidor autoritativo. El cliente enviará únicamente comandos, por ejemplo `SubmitClue` o `SubmitGuess`; nunca decidirá el número secreto, los puntos, el turno ni el resultado.
+La cookie dura un año y se renueva al volver a usar el juego después de un día. Así puede mantenerse la sesión mientras se use ese navegador. «Cerrar sesión» borra la cookie y la sesión de ese navegador; borrar cookies también exige volver a entrar. Rotar el secreto de Discord invalida todas las cookies recordadas. No hay todavía un panel de revocación individual de otros dispositivos.
 
-El servidor debe:
+La identidad firmada conserva nombre y avatar del último login. Para actualizarlos tras cambiarlos en Discord, cierra sesión y vuelve a vincular. Las mesas se guardan en memoria y no sobreviven a los reinicios del servicio; se informa al usuario y se permite crear otra conservando el login.
 
-1. Generar y conservar los números secretos.
-2. Validar identidad, sala, fase, turno y límites de cada comando.
-3. Enviar una vista filtrada del estado: el propietario recibe su carta oculta y los demás reciben el número visible.
-4. Calcular la puntuación y emitir el resultado.
-5. Rechazar comandos duplicados, fuera de tiempo o fuera de turno.
-6. Limitar frecuencia y tamaño de mensajes para evitar abuso.
+El acceso de desarrollo `/dev/login` solo se registra en Development. El despliegue debe usar Production. Los logs de valoración contienen índices del catálogo y votos, no nombres ni pistas privadas.
 
-La interfaz nunca debe ocultar un secreto que ya fue enviado al cliente propietario; la información sensible debe omitirse desde el servidor.
+## Prototipo Unity
 
-## Identidad Discord
-
-La integración usa Discord OAuth2 con `state` aleatorio guardado en una cookie de sesión. La página web no recibe el `ClientSecret`; las credenciales se configuran solo en el servidor como variables de entorno. `Server/appsettings.json` está excluido del control de versiones.
-
-El archivo de ejemplo tuvo credenciales OAuth reales y se sustituyeron por marcadores. Si ese secreto estuvo en un repositorio remoto o se compartió, rótalo en Discord Developer Portal y actualiza `Discord__ClientSecret` en el servidor.
+El modo local en `Assets/` es una simulación distinta. Sus números existen en la memoria del cliente y no ofrece protección antitrampas. La lógica online autoritativa está en `Server/`.

@@ -1,34 +1,32 @@
-# Es un 10 pero...
+# Es un 10, pero…
 
-Juego social de cartas con un prototipo local de Unity y un servidor web multijugador ASP.NET Core.
+Juego social para 2–4 personas, con login de Discord y mesas privadas.
+La versión multijugador actual es la web servida por `Server/`. `Assets/` conserva el prototipo Unity local; sus reglas e interfaz no son la versión online.
 
-## Requisitos
+## Jugar
 
-- Unity 2022.3 LTS o posterior.
-- Módulo de Windows/Mac/Linux según la plataforma donde se quiera probar.
+1. Vincula Discord. El navegador recuerda la sesión; puedes cerrarla desde la cabecera.
+2. Crea una mesa o entra con su código.
+3. Cuando todos están listos empieza una cuenta atrás de 10 segundos, con sonido opcional.
+4. Quien adivina tiene 90 segundos y tres intentos distintos. Los demás ven la carta y dan pistas por una llamada externa o por el chat.
+5. «Dame una pista» envía una frase de categoría aleatoria, adecuada al número. Hay tres ayudas compartidas por turno, separadas por ocho segundos.
+6. Se revela la carta durante cuatro segundos, incluso al agotarse el tiempo. Tras tres vueltas completas hay clasificación y revancha.
 
-## Ejecutar
+**Puntuación:** acertar da 3 puntos. Si el tercer y último intento queda a una unidad, da 1 punto; los demás resultados dan 0. El tiempo agotado da 0.
 
-1. Abre esta carpeta desde Unity Hub.
-2. Abre `Assets/Scenes/Prototype.unity`.
-3. Pulsa Play.
-4. En el menú selecciona el número de jugadores, pulsa **CREAR LOBBY** y luego **INICIAR PARTIDA**.
+## Recuperación y conexiones
 
-Para jugar online desde el navegador, consulta [Server/README.md](Server/README.md). El servidor ofrece login de Discord y mesas multijugador; el despliegue gratuito requiere una cuenta Render y una aplicación OAuth de Discord.
+- Recargar vuelve a la misma mesa con la misma identidad. El código se guarda en el navegador, nunca el número secreto ni credenciales de Discord.
+- Tras 25 segundos sin señales se muestra «Reconectando». Hay 60 segundos desde la última señal para volver antes de omitir el turno; si quedan menos de dos participantes disponibles termina la partida.
+- Se puede salir en cualquier fase. El anfitrión se transfiere si deja de estar disponible.
+- Las mesas sin actividad caducan en 30 minutos. Un reinicio del servidor termina las mesas en memoria y la interfaz explica cómo crear otra.
 
-Esta primera versión usa jugadores simulados para poder probar el flujo sin servidor:
+Consulta [Server/README.md](Server/README.md) para ejecutar y desplegar. Consulta [SECURITY.md](SECURITY.md) para el alcance de la sesión persistente y las protecciones del servidor.
 
-- El jugador local no puede ver su propio número.
-- Los números de los demás jugadores sí son visibles.
-- Se generan pistas de ejemplo para cada turno.
-- Los jugadores simulados resuelven automáticamente sus turnos.
-- La interfaz usa una mesa verde tipo fieltro, cartas ilustradas en crema y coral, fichas de jugadores y composición adaptable a la resolución.
-- El jugador activo puede elegir un número del 1 al 10.
-- La interfaz del turno muestra una carta central: el jugador activo no ve su número y el resto sí.
-- El jugador activo tiene hasta 3 intentos y 90 segundos para adivinar; los demás dan pistas mediante una llamada de voz externa.
-- Cuando le toca dar pistas a una persona, puede pulsar **PISTA** y elegir entre **Hot**, **Pareja**, **Amigos** o **Broma** para recibir una frase sugerida basada en el número de la carta. La sugerencia aparece solo en la vista de quienes dan pistas.
-- Si el jugador local no responde en 90 segundos, su turno se omite y no obtiene puntos.
-- La puntuación se calcula con +3 por acierto exacto, +1 por diferencia de uno y 0 en los demás casos.
-- El turno avanza y el resultado se muestra brevemente en la misma pantalla.
+## Comprobaciones
 
-El cliente Unity existente conserva el modo local simulado; la partida online está en el cliente web servido por el backend. La voz se hace en una llamada externa de Discord.
+```powershell
+dotnet run --project Server.Tests/Server.Tests.csproj -c Release
+```
+
+La suite usa un reloj simulado y verifica turnos, repetición de comandos, reconexión, revelación, puntuación, final, revancha, ayudas, desconexiones y sesión persistente. No requiere paquetes de pruebas externos.

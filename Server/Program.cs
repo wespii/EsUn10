@@ -5,7 +5,8 @@ using System.Text.Json;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.DataProtection.Repositories;
-using System.Xml.Linq;
+using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Logging.Abstractions;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -15,9 +16,17 @@ var port = Environment.GetEnvironmentVariable("PORT") ?? "5080";
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton<RoomStore>();
 builder.Services.AddSingleton<DiscordOAuth>();
+builder.Services.AddSingleton<RememberLogin>();
 builder.Services.AddSingleton<DeviceLoginStore>();
 builder.Services.AddSingleton<AuthTokenStore>();
-builder.Services.AddSignalR();
+builder.Services.AddSignalR(options => options.MaximumReceiveMessageSize = 4096);
+builder.Services.AddHostedService<RoomMaintenance>();
+builder.Services.AddRateLimiter(options => {
+    options.RejectionStatusCode = 429;
+    options.AddPolicy("api", context => RateLimitPartition.GetFixedWindowLimiter(
+        context.Session.GetString("discord_id") ?? context.Connection.RemoteIpAddress?.ToString() ?? "anonymous",
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 120, Window = TimeSpan.FromMinutes(1), QueueLimit = 0, AutoReplenishment = true }));
+});
 builder.Services.AddDistributedMemoryCache();
 var dataProtectionPath = Path.Combine(builder.Environment.ContentRootPath, ".local-keys");
 builder.Services.AddDataProtection().SetApplicationName("EsUn10Pero")
@@ -34,11 +43,14 @@ builder.Services.AddSession(options =>
 });
 
 var app = builder.Build();
+var instanceId = Guid.NewGuid().ToString("N");
 app.UseSession();
+app.Use(async (context, next) => { context.RequestServices.GetRequiredService<RememberLogin>().Restore(context); await next(context); });
+app.UseRateLimiter();
 app.UseDefaultFiles();
 app.UseStaticFiles();
 
-app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+app.MapGet("/health", () => Results.Ok(new { status = "ok", instanceId }));
 
 if (app.Environment.IsDevelopment())
 {
@@ -58,7 +70,7 @@ app.MapGet("/auth/discord", (HttpContext context, DiscordOAuth oauth, string? de
     context.Session.SetString("oauth_state", state);
     if (!string.IsNullOrWhiteSpace(device)) context.Session.SetString("oauth_device", device);
     return Results.Redirect(oauth.GetAuthorizationUrl(state));
-});
+}).RequireRateLimiting("api");
 
 app.MapGet("/auth/discord/callback", async (
     string? code,
@@ -86,12 +98,13 @@ app.MapGet("/auth/discord/callback", async (
     }
 
     var identity = await oauth.ExchangeCodeAsync(code, cancellationToken);
+    context.RequestServices.GetRequiredService<RememberLogin>().Issue(context, new(identity.Id, identity.DisplayName, identity.AvatarUrl));
     context.Session.SetString("discord_id", identity.Id);
     context.Session.SetString("display_name", identity.DisplayName);
     if (identity.AvatarUrl != null) context.Session.SetString("avatar_url", identity.AvatarUrl);
     if (device != null) devices.Authorize(device, identity);
     return Results.Redirect("/");
-});
+}).RequireRateLimiting("api");
 
 // Unity opens the returned URL in the system browser; Discord's client secret stays on this server.
 app.MapPost("/auth/unity/device", (HttpRequest request, DeviceLoginStore devices) =>
@@ -99,7 +112,7 @@ app.MapPost("/auth/unity/device", (HttpRequest request, DeviceLoginStore devices
     var device = devices.Create();
     var baseUrl = $"{request.Scheme}://{request.Host}";
     return Results.Ok(new { deviceId = device.Id, loginUrl = $"{baseUrl}/auth/discord?device={Uri.EscapeDataString(device.Id)}", expiresIn = 300 });
-});
+}).RequireRateLimiting("api");
 
 app.MapGet("/auth/unity/device/{deviceId}", (string deviceId, DeviceLoginStore devices, AuthTokenStore tokens) =>
 {
@@ -109,7 +122,7 @@ app.MapGet("/auth/unity/device/{deviceId}", (string deviceId, DeviceLoginStore d
     var token = tokens.Issue(result.Identity);
     return Results.Ok(new { status = "authorized", accessToken = token.Value, expiresIn = 86400,
         player = new { id = result.Identity.Id, displayName = result.Identity.DisplayName, avatarUrl = result.Identity.AvatarUrl } });
-});
+}).RequireRateLimiting("api");
 
 app.MapGet("/auth/me", (HttpContext context) =>
 {
@@ -119,16 +132,20 @@ app.MapGet("/auth/me", (HttpContext context) =>
     return id == null
         ? Results.Json(new { error = "not_authenticated", loginUrl = "/auth/discord" }, statusCode: StatusCodes.Status401Unauthorized)
         : Results.Ok(new { id, displayName = name, avatarUrl = avatar });
-});
+}).RequireRateLimiting("api");
+
+app.MapPost("/auth/logout", (HttpContext context, RememberLogin remembered) => {
+    context.Session.Clear(); remembered.Forget(context); return Results.Ok(new { status = "signed_out" });
+}).RequireRateLimiting("api");
 
 app.MapPost("/rooms", async (HttpContext context, RoomStore rooms, AuthTokenStore tokens, IHubContext<GameHub> hub) =>
 {
     var player = RequirePlayer(context, tokens);
     if (player == null) return Results.Unauthorized();
     var room = rooms.Create(player);
-    await hub.Clients.Group(room.Code).SendAsync("roomUpdated", room.ToView(player.Id));
+    await hub.Clients.Group(room.Code).SendAsync("roomChanged", room.Code);
     return Results.Ok(room.ToView(player.Id));
-});
+}).RequireRateLimiting("api");
 
 app.MapPost("/rooms/{code}/join", async (string code, HttpContext context, RoomStore rooms, AuthTokenStore tokens, IHubContext<GameHub> hub) =>
 {
@@ -137,16 +154,16 @@ app.MapPost("/rooms/{code}/join", async (string code, HttpContext context, RoomS
     return rooms.Join(code, player) is { } room
         ? await NotifyRoom(hub, room, player.Id)
         : Results.BadRequest("Room does not exist, is full, or the game has started.");
-});
+}).RequireRateLimiting("api");
 
 app.MapGet("/rooms/{code}", (string code, HttpContext context, RoomStore rooms, AuthTokenStore tokens) =>
 {
     var player = RequirePlayer(context, tokens);
     if (player == null) return Results.Unauthorized();
-    return rooms.Get(code) is { } room && room.ContainsPlayer(player.Id)
+    return rooms.Get(code) is { } room && room.Touch(player.Id)
         ? Results.Ok(room.ToView(player.Id))
         : Results.NotFound();
-});
+}).RequireRateLimiting("api");
 
 app.MapPost("/rooms/{code}/ready", async (string code, HttpContext context, RoomStore rooms, AuthTokenStore tokens, IHubContext<GameHub> hub) =>
 {
@@ -155,16 +172,16 @@ app.MapPost("/rooms/{code}/ready", async (string code, HttpContext context, Room
     return rooms.SetReady(code, player.Id) is { } room
         ? await NotifyRoom(hub, room, player.Id)
         : Results.BadRequest("Invalid room or player.");
-});
+}).RequireRateLimiting("api");
 
-app.MapPost("/rooms/{code}/leave", (string code, HttpContext context, RoomStore rooms, AuthTokenStore tokens) =>
+app.MapPost("/rooms/{code}/leave", async (string code, HttpContext context, RoomStore rooms, AuthTokenStore tokens, IHubContext<GameHub> hub) =>
 {
     var player = RequirePlayer(context, tokens);
     if (player == null) return Results.Unauthorized();
-    return rooms.Leave(code, player.Id)
-        ? Results.Ok(new { status = "left" })
-        : Results.BadRequest(new { error = "No se puede salir de esta mesa en este momento." });
-});
+    if (!rooms.Leave(code, player.Id)) return Results.BadRequest(new { error = "La mesa ya no está disponible." });
+    await hub.Clients.Group(code).SendAsync("roomChanged", code);
+    return Results.Ok(new { status = "left" });
+}).RequireRateLimiting("api");
 
 app.MapPost("/rooms/{code}/start", async (string code, HttpContext context, RoomStore rooms, AuthTokenStore tokens, IHubContext<GameHub> hub) =>
 {
@@ -173,7 +190,7 @@ app.MapPost("/rooms/{code}/start", async (string code, HttpContext context, Room
     return rooms.Start(code, player.Id) is { } room
         ? await NotifyRoom(hub, room, player.Id)
         : Results.BadRequest("Only the host can start a ready room.");
-});
+}).RequireRateLimiting("api");
 
 app.MapPost("/rooms/{code}/guess", async (string code, GuessRequest request, HttpContext context, RoomStore rooms, AuthTokenStore tokens, IHubContext<GameHub> hub) =>
 {
@@ -181,11 +198,11 @@ app.MapPost("/rooms/{code}/guess", async (string code, GuessRequest request, Htt
     if (player == null) return Results.Unauthorized();
     var room = rooms.Get(code);
     if (room == null || !room.ContainsPlayer(player.Id)) return Results.NotFound();
-    var action = room.Guess(player.Id, request.Number);
+    var action = room.Guess(player.Id, request.Number, request.TurnId, request.RequestId);
     if (!action.Accepted) return Results.BadRequest(new { error = action.Message });
-    await hub.Clients.Group(room.Code).SendAsync("roomChanged");
+    await hub.Clients.Group(room.Code).SendAsync("roomChanged", room.Code);
     return Results.Ok(new { status = action.Message, room = room.ToView(player.Id) });
-});
+}).RequireRateLimiting("api");
 
 app.MapPost("/rooms/{code}/clue", async (string code, ClueRequest request, HttpContext context, RoomStore rooms, AuthTokenStore tokens, IHubContext<GameHub> hub) =>
 {
@@ -193,25 +210,43 @@ app.MapPost("/rooms/{code}/clue", async (string code, ClueRequest request, HttpC
     if (player == null) return Results.Unauthorized();
     var room = rooms.Get(code);
     if (room == null || !room.ContainsPlayer(player.Id)) return Results.NotFound();
-    var action = room.AddClue(player.Id, request.Text);
+    var action = room.AddClue(player.Id, request.Text, request.TurnId);
     if (!action.Accepted) return Results.BadRequest(new { error = action.Message });
-    await hub.Clients.Group(room.Code).SendAsync("roomChanged");
+    await hub.Clients.Group(room.Code).SendAsync("roomChanged", room.Code);
     return Results.Ok(room.ToView(player.Id));
-});
+}).RequireRateLimiting("api");
 
-app.MapPost("/rooms/{code}/hint", async (string code, HttpContext context, RoomStore rooms, AuthTokenStore tokens, IHubContext<GameHub> hub) =>
+app.MapPost("/rooms/{code}/hint", async (string code, TurnRequest request, HttpContext context, RoomStore rooms, AuthTokenStore tokens, IHubContext<GameHub> hub) =>
 {
     var player = RequirePlayer(context, tokens);
     if (player == null) return Results.Unauthorized();
     var room = rooms.Get(code);
     if (room == null || !room.ContainsPlayer(player.Id)) return Results.NotFound();
-    var action = room.GetHint(player.Id);
+    var action = room.GetHint(player.Id, request.TurnId);
     if (!action.Accepted) return Results.BadRequest(new { error = action.Message });
-    await hub.Clients.Group(room.Code).SendAsync("roomChanged");
+    await hub.Clients.Group(room.Code).SendAsync("roomChanged", room.Code);
     return Results.Ok(new { suggestion = action.Message, room = room.ToView(player.Id) });
-});
+}).RequireRateLimiting("api");
 
-app.MapHub<GameHub>("/realtime");
+app.MapPost("/rooms/{code}/rematch", async (string code, HttpContext context, RoomStore rooms, AuthTokenStore tokens, IHubContext<GameHub> hub) => {
+    var player = RequirePlayer(context, tokens);
+    if (player == null) return Results.Unauthorized();
+    var room = rooms.Get(code);
+    if (room?.Rematch(player.Id) != true) return Results.BadRequest(new { error = "Solo el anfitrión puede preparar la revancha al terminar." });
+    return await NotifyRoom(hub, room, player.Id);
+}).RequireRateLimiting("api");
+app.MapPost("/rooms/{code}/hint-rating", (string code, HintRatingRequest request, HttpContext context, RoomStore rooms, AuthTokenStore tokens, ILoggerFactory logs) => {
+    var player = RequirePlayer(context, tokens);
+    if (player == null) return Results.Unauthorized();
+    var room = rooms.Get(code);
+    var cards = room?.RateHints(player.Id, request.TurnId);
+    if (cards == null) return Results.BadRequest(new { error = "Esta valoración ya se envió o su turno terminó." });
+    // Catalog IDs and a vote only: no account names or private messages in feedback logs.
+    foreach (var card in cards) logs.CreateLogger("HintFeedback").LogInformation("Hint {CardId}: helpful={Helpful}", card, request.Helpful);
+    return Results.Ok(room!.ToView(player.Id));
+}).RequireRateLimiting("api");
+
+app.MapHub<GameHub>("/realtime").RequireRateLimiting("api");
 
 app.Run($"http://0.0.0.0:{port}");
 
@@ -229,13 +264,14 @@ static AuthenticatedPlayer? RequirePlayer(HttpContext context, AuthTokenStore to
 static async Task<IResult> NotifyRoom(IHubContext<GameHub> hub, Room room, string viewerId)
 {
     var view = room.ToView(viewerId);
-    await hub.Clients.Group(room.Code).SendAsync("roomUpdated", view);
+    await hub.Clients.Group(room.Code).SendAsync("roomChanged", room.Code);
     return Results.Ok(view);
 }
 
 sealed class DeviceLoginStore
 {
     private readonly ConcurrentDictionary<string, DeviceLogin> pending = new();
+    public void Prune() { foreach (var p in pending) if (p.Value.ExpiresAt <= DateTimeOffset.UtcNow) pending.TryRemove(p.Key, out _); }
     public DeviceLogin Create()
     {
         var id = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
@@ -269,6 +305,7 @@ record DevicePollResult(AuthenticatedPlayer? Identity, bool IsExpired = false)
 sealed class AuthTokenStore
 {
     private readonly ConcurrentDictionary<string, (AuthenticatedPlayer Player, DateTimeOffset ExpiresAt)> tokens = new();
+    public void Prune() { foreach (var p in tokens) if (p.Value.ExpiresAt <= DateTimeOffset.UtcNow) tokens.TryRemove(p.Key, out _); }
     public (string Value, DateTimeOffset ExpiresAt) Issue(AuthenticatedPlayer player)
     {
         var value = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
@@ -281,37 +318,41 @@ sealed class AuthTokenStore
 
 sealed class GameHub(AuthTokenStore tokens, RoomStore rooms) : Hub
 {
-    public override async Task OnConnectedAsync()
+    private string? PlayerId()
     {
-        var raw = GetAccessToken();
-        if (!raw.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) || tokens.Resolve(raw[7..]) == null)
-        {
-            Context.Abort();
-            return;
-        }
-        await base.OnConnectedAsync();
+        var context = Context.GetHttpContext();
+        var raw = context?.Request.Headers.Authorization.ToString() ?? "";
+        var token = raw.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ? raw[7..] : context?.Request.Query["access_token"].ToString();
+        return !string.IsNullOrEmpty(token) ? tokens.Resolve(token)?.Id : context?.Session.GetString("discord_id");
     }
-
+    public override Task OnConnectedAsync()
+    {
+        var id = PlayerId();
+        if (id == null) { Context.Abort(); return Task.CompletedTask; }
+        Context.Items["playerId"] = id;
+        return base.OnConnectedAsync();
+    }
     public async Task JoinRoom(string code)
     {
-        var raw = GetAccessToken();
-        var player = raw.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ? tokens.Resolve(raw[7..]) : null;
-        if (player == null || rooms.Get(code)?.ContainsPlayer(player.Id) != true) throw new HubException("No perteneces a esta sala.");
+        var id = Context.Items["playerId"] as string;
+        if (id == null || rooms.Get(code)?.Touch(id) != true) throw new HubException("La mesa ya no está disponible.");
+        if (Context.Items["room"] is string previous) await Groups.RemoveFromGroupAsync(Context.ConnectionId, previous);
+        Context.Items["room"] = code.ToUpperInvariant();
         await Groups.AddToGroupAsync(Context.ConnectionId, code.ToUpperInvariant());
+        await Clients.Group(code.ToUpperInvariant()).SendAsync("roomChanged", code.ToUpperInvariant());
     }
-
-    private string GetAccessToken()
+    public Task LeaveRoom() => Context.Items["room"] is string code ? Groups.RemoveFromGroupAsync(Context.ConnectionId, code) : Task.CompletedTask;
+    public void Pulse(string code)
     {
-        var request = Context.GetHttpContext()?.Request;
-        var raw = request?.Headers.Authorization.ToString() ?? "";
-        return raw.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
-            ? raw
-            : "Bearer " + (request?.Query["access_token"].ToString() ?? "");
+        var id = Context.Items["playerId"] as string;
+        if (id == null || rooms.Get(code)?.Touch(id) != true) throw new HubException("La mesa ya no está disponible.");
     }
 }
 
-record GuessRequest(int Number);
-record ClueRequest(string Text);
+record GuessRequest(int Number, string? TurnId, string? RequestId);
+record ClueRequest(string? Text, string? TurnId);
+record TurnRequest(string? TurnId);
+record HintRatingRequest(string? TurnId, bool Helpful);
 record DevLoginRequest(string Id, string DisplayName);
 record GameAction(bool Accepted, string Message);
 record AuthenticatedPlayer(string Id, string DisplayName, string? AvatarUrl);
@@ -370,286 +411,4 @@ sealed class DiscordOAuth(IConfiguration configuration, IHttpClientFactory clien
         var avatarUrl = avatarHash == null ? null : $"https://cdn.discordapp.com/avatars/{id}/{avatarHash}.png?size=128";
         return new DiscordIdentity(id, displayName, avatarUrl);
     }
-}
-
-sealed class RoomStore
-{
-    private const int MaxPlayers = 4;
-    private readonly ConcurrentDictionary<string, Room> rooms = new();
-
-    public Room Create(AuthenticatedPlayer host)
-    {
-        string code;
-        do code = RandomNumberGenerator.GetInt32(100000, 1000000).ToString();
-        while (rooms.ContainsKey(code));
-        var room = new Room(code, host);
-        rooms[code] = room;
-        return room;
-    }
-
-    public Room? Get(string code) => rooms.TryGetValue(code.ToUpperInvariant(), out var room) ? room : null;
-
-    public Room? Join(string code, AuthenticatedPlayer player)
-    {
-        var room = Get(code);
-        return room != null && room.TryAdd(player, MaxPlayers) ? room : null;
-    }
-
-    public Room? SetReady(string code, string playerId)
-    {
-        var room = Get(code);
-        return room != null && room.SetReady(playerId) ? room : null;
-    }
-
-    public Room? Start(string code, string playerId)
-    {
-        var room = Get(code);
-        return room != null && room.Start(playerId) ? room : null;
-    }
-
-    public bool Leave(string code, string playerId)
-    {
-        var normalizedCode = code.ToUpperInvariant();
-        var room = Get(normalizedCode);
-        if (room == null || !room.TryLeave(playerId)) return false;
-        if (room.HostId != playerId) return true;
-        return ((ICollection<KeyValuePair<string, Room>>)rooms)
-            .Remove(new KeyValuePair<string, Room>(normalizedCode, room));
-    }
-}
-
-sealed class Room
-{
-    private readonly object gate = new();
-    private readonly Random random = new();
-    private readonly List<string> clues = new();
-    private readonly HashSet<HintCard> usedHints = new();
-    private HintCard? previousHint;
-    private string lastResult = "";
-    private DateTimeOffset turnStartedAt;
-    private DateTimeOffset? countdownEndsAt;
-    private int activePlayerIndex;
-    private int guessesRemaining = 3;
-    private int roundNumber = 1;
-    public string Code { get; }
-    public string HostId { get; }
-    public string State { get; private set; } = "lobby";
-    public List<RoomPlayer> Players { get; } = new();
-
-    public Room(string code, AuthenticatedPlayer host)
-    {
-        Code = code;
-        HostId = host.Id;
-        Players.Add(new RoomPlayer(host.Id, host.DisplayName, host.AvatarUrl));
-    }
-
-    public Room Add(AuthenticatedPlayer player)
-    {
-        lock (gate)
-        {
-            if (Players.All(p => p.Id != player.Id)) Players.Add(new RoomPlayer(player.Id, player.DisplayName, player.AvatarUrl));
-            return this;
-        }
-    }
-
-    public bool TryAdd(AuthenticatedPlayer player, int maximumPlayers)
-    {
-        lock (gate)
-        {
-            if (State != "lobby") return false;
-            if (Players.Any(p => p.Id == player.Id)) return true;
-            if (Players.Count >= maximumPlayers) return false;
-            Players.Add(new RoomPlayer(player.Id, player.DisplayName, player.AvatarUrl));
-            UpdateCountdown();
-            return true;
-        }
-    }
-
-    public bool SetReady(string playerId)
-    {
-        lock (gate)
-        {
-            var player = Players.FirstOrDefault(p => p.Id == playerId);
-            if (player == null || State != "lobby") return false;
-            player.Ready = !player.Ready;
-            UpdateCountdown();
-            return true;
-        }
-    }
-
-    public bool TryLeave(string playerId)
-    {
-        lock (gate)
-        {
-            if (State != "lobby") return false;
-            var player = Players.FirstOrDefault(p => p.Id == playerId);
-            if (player == null) return false;
-            if (playerId != HostId) Players.Remove(player);
-            if (playerId == HostId) countdownEndsAt = null;
-            else UpdateCountdown();
-            return true;
-        }
-    }
-
-    public bool Start(string playerId)
-    {
-        lock (gate)
-        {
-            if (playerId != HostId || Players.Count < 2 || Players.Any(p => !p.Ready) || State != "lobby" ||
-                countdownEndsAt == null || DateTimeOffset.UtcNow < countdownEndsAt.Value) return false;
-            State = "playing";
-            countdownEndsAt = null;
-            activePlayerIndex = 0;
-            roundNumber = 1;
-            guessesRemaining = 3;
-            turnStartedAt = DateTimeOffset.UtcNow;
-            Players[activePlayerIndex].SecretNumber = random.Next(1, 11);
-            clues.Clear();
-            return true;
-        }
-    }
-
-    // Called only under gate. A changed deadline invalidates any previous countdown.
-    private void UpdateCountdown()
-    {
-        if (State != "lobby" || Players.Count < 2 || Players.Any(p => !p.Ready))
-        {
-            countdownEndsAt = null;
-            return;
-        }
-        if (countdownEndsAt != null) return;
-        var deadline = DateTimeOffset.UtcNow.AddSeconds(10);
-        countdownEndsAt = deadline;
-        _ = StartAfterCountdown(deadline);
-    }
-
-    private async Task StartAfterCountdown(DateTimeOffset deadline)
-    {
-        var delay = deadline - DateTimeOffset.UtcNow;
-        if (delay > TimeSpan.Zero) await Task.Delay(delay);
-        lock (gate)
-        {
-            if (countdownEndsAt == deadline) Start(HostId);
-        }
-    }
-
-    public GameAction Guess(string playerId, int number)
-    {
-        lock (gate)
-        {
-            if (State != "playing" || Players[activePlayerIndex].Id != playerId) return new(false, "No es tu turno.");
-            if (number is < 1 or > 10) return new(false, "Elige un número del 1 al 10.");
-            if (TurnExpired()) AdvanceTurn("Se acabó el tiempo. Turno omitido.");
-            if (Players[activePlayerIndex].Id != playerId) return new(false, "Se acabó el tiempo. El turno avanzó.");
-            guessesRemaining--;
-            var secret = Players[activePlayerIndex].SecretNumber;
-            if (number == secret || guessesRemaining == 0)
-            {
-                var points = number == secret ? 3 : Math.Abs(secret - number) == 1 ? 1 : 0;
-                var guesser = Players[activePlayerIndex];
-                guesser.Score += points;
-                lastResult = number == secret ? $"¡Correcto! {guesser.DisplayName} suma {points} puntos." : $"La carta era {secret}. {guesser.DisplayName} suma {points} puntos.";
-                AdvanceTurn(null);
-                return new(true, lastResult);
-            }
-            lastResult = $"No era {number}. Quedan {guessesRemaining} intentos.";
-            return new(true, lastResult);
-        }
-    }
-
-    public GameAction AddClue(string playerId, string text)
-    {
-        lock (gate)
-        {
-            if (State != "playing") return new(false, "La partida no está activa.");
-            if (Players[activePlayerIndex].Id == playerId) return new(false, "Quien adivina no puede dar pistas.");
-            if (TurnExpired()) return new(false, "Se acabó el tiempo de este turno.");
-            if (string.IsNullOrWhiteSpace(text)) return new(false, "Escribe una pista.");
-            var safe = text.Trim();
-            if (safe.Length > 120) safe = safe[..120];
-            clues.Add($"{Players.First(p => p.Id == playerId).DisplayName}: Es un 10, pero {safe}");
-            return new(true, "Pista enviada.");
-        }
-    }
-
-    public GameAction GetHint(string playerId)
-    {
-        lock (gate)
-        {
-            if (State != "playing" || Players[activePlayerIndex].Id == playerId) return new(false, "Solo quienes dan pistas pueden pedir ayuda.");
-            if (TurnExpired()) return new(false, "Se acabó el tiempo de este turno.");
-            var secret = Players[activePlayerIndex].SecretNumber;
-            // Select on the server using the active card, never a number/category from the browser.
-            var cards = HintCatalog.Cards.Where(card => card.Number == secret).ToArray();
-            var available = cards.Where(card => !usedHints.Contains(card)).ToArray();
-            if (available.Length == 0)
-            {
-                usedHints.RemoveWhere(card => card.Number == secret);
-                available = cards.Where(card => card != previousHint).ToArray();
-            }
-            var categories = available.Select(card => card.Category).Distinct().ToArray();
-            var category = categories[random.Next(categories.Length)];
-            var options = available.Where(card => card.Category == category).ToArray();
-            var hint = options[random.Next(options.Length)];
-            usedHints.Add(hint);
-            previousHint = hint;
-            clues.Add($"{Players.First(p => p.Id == playerId).DisplayName}: Es un 10, pero {hint.Text}");
-            return new(true, hint.Text);
-        }
-    }
-
-    public object ToView(string viewerId)
-    {
-        lock (gate)
-        {
-            if (countdownEndsAt != null && DateTimeOffset.UtcNow >= countdownEndsAt.Value) Start(HostId);
-            if (State == "playing" && TurnExpired()) AdvanceTurn("Se acabó el tiempo. Turno omitido.");
-            var guesserId = State == "playing" ? Players[activePlayerIndex].Id : null;
-            return new
-            {
-                code = Code,
-                state = State,
-                countdownEndsAt,
-                hostId = HostId,
-                round = roundNumber,
-                activePlayerId = guesserId,
-                guessesRemaining,
-                turnStartedAt,
-                deadline = State == "playing" ? turnStartedAt.AddSeconds(90) : (DateTimeOffset?)null,
-                lastResult,
-                clues = clues.ToArray(),
-                viewerIsGuesser = viewerId == guesserId,
-                secretNumber = viewerId == guesserId ? (int?)null : State == "playing" ? Players[activePlayerIndex].SecretNumber : (int?)null,
-                players = Players.Select(p => new { id = p.Id, displayName = p.DisplayName, avatarUrl = p.AvatarUrl, ready = p.Ready, score = p.Score }).ToArray()
-            };
-        }
-    }
-
-    private bool TurnExpired() => DateTimeOffset.UtcNow >= turnStartedAt.AddSeconds(90);
-
-    private void AdvanceTurn(string? result)
-    {
-        if (result != null) lastResult = result;
-        if (activePlayerIndex == Players.Count - 1) roundNumber++;
-        activePlayerIndex = (activePlayerIndex + 1) % Players.Count;
-        Players[activePlayerIndex].SecretNumber = random.Next(1, 11);
-        guessesRemaining = 3;
-        turnStartedAt = DateTimeOffset.UtcNow;
-        clues.Clear();
-    }
-
-    public bool ContainsPlayer(string playerId)
-    {
-        lock (gate) return Players.Any(p => p.Id == playerId);
-    }
-}
-
-sealed class RoomPlayer(string id, string displayName, string? avatarUrl)
-{
-    public string Id { get; } = id;
-    public string DisplayName { get; } = displayName;
-    public string? AvatarUrl { get; } = avatarUrl;
-    public bool Ready { get; set; }
-    public int Score { get; set; }
-    public int SecretNumber { get; set; }
 }

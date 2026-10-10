@@ -1,0 +1,37 @@
+// Run after building Server in Release. Requires Playwright and an installed Edge browser.
+const assert=require('node:assert/strict'),{spawn}=require('node:child_process');
+const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
+const base='http://127.0.0.1:5093';
+const launch=()=>spawn(process.env.DOTNET_HOST_PATH||'dotnet',['bin/Release/net8.0/EsUn10Pero.Server.dll'],{cwd:process.cwd()+'/Server',env:{...process.env,PORT:'5093',ASPNETCORE_ENVIRONMENT:'Development',Discord__ClientSecret:'test-only-not-a-discord-secret'},stdio:'ignore'});
+let server=launch(),browser;
+async function waitServer(){for(let i=0;i<30;i++){try{if((await fetch(base+'/health')).ok)return}catch{}await new Promise(r=>setTimeout(r,200))}throw Error('Server did not start')}
+(async()=>{
+await waitServer();browser=await chromium.launch({channel:'msedge',headless:true});
+const contexts=await Promise.all([browser.newContext({viewport:{width:1366,height:768}}),browser.newContext({viewport:{width:390,height:844}})]);
+for(let i=0;i<2;i++){const response=await contexts[i].request.post(base+'/dev/login',{data:{id:String(i),displayName:i?'Invitado':'Anfitrión'}});assert.equal(response.status(),200)}
+const pages=await Promise.all(contexts.map(c=>c.newPage()));const errors=[];pages.forEach(p=>p.on('pageerror',e=>errors.push(e.message)));
+await Promise.all(pages.map(p=>p.goto(base)));const [a,b]=pages;
+await a.getByRole('button',{name:'CREAR MESA'}).click();const code=await a.locator('#inviteCode').inputValue();await b.locator('#joinCode').fill(code);await b.getByRole('button',{name:'UNIRME',exact:true}).click();
+await a.getByRole('button',{name:'ESTOY LISTO',exact:true}).click();await b.getByRole('button',{name:'ESTOY LISTO',exact:true}).click();await a.locator('#countdownNumber').waitFor({state:'visible'});assert.ok(+await a.locator('#countdownNumber').textContent()<=10);
+await a.locator('#guessButton').waitFor({timeout:16000});await b.locator('#hintButton').waitFor();assert.equal(await a.locator('#cardNumber').textContent(),'?');assert.match(await b.locator('#cardNumber').textContent(),/^([1-9]|10)$/);console.log('PASS browser lobby, countdown, SignalR events and private views');
+await b.locator('#clueText').fill('No pierdas este borrador');await b.locator('#clueText').focus();const secret=+await b.locator('#cardNumber').textContent();const wrong=secret%10+1;await a.locator(`[data-number="${wrong}"]`).click();await a.locator('#guessButton').dblclick();await a.locator('#attempts').filter({hasText:'2 INTENTOS'}).waitFor();await b.getByText(`No era ${wrong}. Quedan 2 intentos.`,{exact:true}).waitFor();assert.equal(await b.locator('#clueText').inputValue(),'No pierdas este borrador');assert.equal(await b.locator('#clueText').evaluate(e=>e===document.activeElement),true);assert.equal(await a.locator(`[data-number="${wrong}"]`).isDisabled(),true);console.log('PASS double-click and draft/focus preservation');
+await a.reload();await a.locator('#guessButton').waitFor();assert.equal(await a.locator('#cardNumber').textContent(),'?');assert.match(await a.locator('#attempts').textContent(),/2 INTENTOS/);console.log('PASS refresh resumes same game');
+await b.locator('#hintButton').click();await b.locator('#hintStatus').filter({hasText:'Otra ayuda'}).waitFor();assert.equal(await b.locator('#hintButton').isDisabled(),true);
+for(const [width,height] of [[1366,768],[1280,720],[390,844],[360,640]]){await b.setViewportSize({width,height});const fit=await b.evaluate(()=>[...document.querySelectorAll('.interaction button,.interaction input')].every(e=>{const r=e.getBoundingClientRect();return r.top>=0&&r.bottom<=innerHeight}));assert.ok(fit,`controls fit ${width}x${height}`)}
+await a.locator(`[data-number="${secret}"]`).click();await a.locator('#guessButton').click();await a.getByText('La carta revelada',{exact:true}).waitFor();assert.equal(+await a.locator('#cardNumber').textContent(),secret);await a.getByRole('button',{name:'Sí',exact:true}).click();await a.locator('#rating').waitFor({state:'hidden'});await b.locator('#guessButton').waitFor({timeout:7000});console.log('PASS hints, reveal, feedback and responsive controls');
+await b.getByRole('button',{name:'Salir de la mesa',exact:true}).click();await b.getByRole('button',{name:'CREAR MESA'}).waitFor();await a.getByText('Fin de la partida',{exact:true}).waitFor();await a.getByRole('button',{name:'REVANCHA',exact:true}).click();await a.locator('#inviteCode').waitFor();console.log('PASS leave, end of game and rematch');
+assert.deepEqual(errors,[]);console.log('PASS no browser exceptions');
+const crypto=require('node:crypto');const rememberContext=await browser.newContext();
+const payload=Buffer.from(JSON.stringify({Player:{Id:'remembered-test',DisplayName:'Sesión recordada',AvatarUrl:null},IssuedAt:new Date(Date.now()-2*86400000).toISOString(),ExpiresAt:new Date(Date.now()+365*86400000).toISOString()})).toString('base64url');
+const key=crypto.createHash('sha256').update('esun10.remember.v1:test-only-not-a-discord-secret').digest();const signature=crypto.createHmac('sha256',key).update(payload).digest('base64url');
+await rememberContext.addCookies([{name:'esun10.remember',value:payload+'.'+signature,url:base,httpOnly:true,sameSite:'Lax',expires:Math.floor(Date.now()/1000)+365*86400}]);
+assert.equal((await rememberContext.request.get(base+'/auth/me')).status(),200);
+const savedCookies=await rememberContext.cookies();assert.ok(savedCookies.find(c=>c.name==='esun10.remember').expires>Date.now()/1000+300*86400);
+const savedMesa=await (await rememberContext.request.post(base+'/rooms',{data:{}})).json();
+const rememberPage=await rememberContext.newPage();await rememberPage.goto(base);await rememberPage.getByRole('button',{name:'CREAR MESA'}).click();await rememberPage.locator('#inviteCode').waitFor();
+await Promise.all(contexts.map(c=>c.close()));const stopped=new Promise(resolve=>server.once('exit',resolve));server.kill();await stopped;server=launch();await waitServer();
+await rememberPage.reload();await rememberPage.getByRole('button',{name:'CREAR MESA'}).waitFor();assert.match(await rememberPage.locator('#error').textContent(),/mesa terminó o caducó/);assert.equal((await rememberContext.request.get(base+'/auth/me')).status(),200);
+const newBrowserContext=await browser.newContext();await newBrowserContext.addCookies(savedCookies.filter(c=>c.name==='esun10.remember'));assert.equal((await newBrowserContext.request.get(base+'/auth/me')).status(),200);
+assert.equal((await newBrowserContext.request.post(base+'/auth/logout',{data:{}})).status(),200);assert.equal((await newBrowserContext.request.get(base+'/auth/me')).status(),401);
+console.log('PASS real restart preserves login, fresh browser session restores identity, lost room explained, logout clears identity');
+})().catch(e=>{console.error(e);process.exitCode=1}).finally(async()=>{await browser?.close();server.kill()});
