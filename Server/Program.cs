@@ -433,6 +433,7 @@ sealed class Room
     private readonly List<string> clues = new();
     private string lastResult = "";
     private DateTimeOffset turnStartedAt;
+    private DateTimeOffset? countdownEndsAt;
     private int activePlayerIndex;
     private int guessesRemaining = 3;
     private int roundNumber = 1;
@@ -465,6 +466,7 @@ sealed class Room
             if (Players.Any(p => p.Id == player.Id)) return true;
             if (Players.Count >= maximumPlayers) return false;
             Players.Add(new RoomPlayer(player.Id, player.DisplayName, player.AvatarUrl));
+            UpdateCountdown();
             return true;
         }
     }
@@ -476,6 +478,7 @@ sealed class Room
             var player = Players.FirstOrDefault(p => p.Id == playerId);
             if (player == null || State != "lobby") return false;
             player.Ready = !player.Ready;
+            UpdateCountdown();
             return true;
         }
     }
@@ -488,6 +491,8 @@ sealed class Room
             var player = Players.FirstOrDefault(p => p.Id == playerId);
             if (player == null) return false;
             if (playerId != HostId) Players.Remove(player);
+            if (playerId == HostId) countdownEndsAt = null;
+            else UpdateCountdown();
             return true;
         }
     }
@@ -496,8 +501,10 @@ sealed class Room
     {
         lock (gate)
         {
-            if (playerId != HostId || Players.Count < 2 || Players.Any(p => !p.Ready) || State != "lobby") return false;
+            if (playerId != HostId || Players.Count < 2 || Players.Any(p => !p.Ready) || State != "lobby" ||
+                countdownEndsAt == null || DateTimeOffset.UtcNow < countdownEndsAt.Value) return false;
             State = "playing";
+            countdownEndsAt = null;
             activePlayerIndex = 0;
             roundNumber = 1;
             guessesRemaining = 3;
@@ -505,6 +512,30 @@ sealed class Room
             Players[activePlayerIndex].SecretNumber = random.Next(1, 11);
             clues.Clear();
             return true;
+        }
+    }
+
+    // Called only under gate. A changed deadline invalidates any previous countdown.
+    private void UpdateCountdown()
+    {
+        if (State != "lobby" || Players.Count < 2 || Players.Any(p => !p.Ready))
+        {
+            countdownEndsAt = null;
+            return;
+        }
+        if (countdownEndsAt != null) return;
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(10);
+        countdownEndsAt = deadline;
+        _ = StartAfterCountdown(deadline);
+    }
+
+    private async Task StartAfterCountdown(DateTimeOffset deadline)
+    {
+        var delay = deadline - DateTimeOffset.UtcNow;
+        if (delay > TimeSpan.Zero) await Task.Delay(delay);
+        lock (gate)
+        {
+            if (countdownEndsAt == deadline) Start(HostId);
         }
     }
 
@@ -566,12 +597,14 @@ sealed class Room
     {
         lock (gate)
         {
+            if (countdownEndsAt != null && DateTimeOffset.UtcNow >= countdownEndsAt.Value) Start(HostId);
             if (State == "playing" && TurnExpired()) AdvanceTurn("Se acabó el tiempo. Turno omitido.");
             var guesserId = State == "playing" ? Players[activePlayerIndex].Id : null;
             return new
             {
                 code = Code,
                 state = State,
+                countdownEndsAt,
                 hostId = HostId,
                 round = roundNumber,
                 activePlayerId = guesserId,
