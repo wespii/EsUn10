@@ -199,13 +199,13 @@ app.MapPost("/rooms/{code}/clue", async (string code, ClueRequest request, HttpC
     return Results.Ok(room.ToView(player.Id));
 });
 
-app.MapPost("/rooms/{code}/hint", async (string code, HintRequest request, HttpContext context, RoomStore rooms, AuthTokenStore tokens, IHubContext<GameHub> hub) =>
+app.MapPost("/rooms/{code}/hint", async (string code, HttpContext context, RoomStore rooms, AuthTokenStore tokens, IHubContext<GameHub> hub) =>
 {
     var player = RequirePlayer(context, tokens);
     if (player == null) return Results.Unauthorized();
     var room = rooms.Get(code);
     if (room == null || !room.ContainsPlayer(player.Id)) return Results.NotFound();
-    var action = room.GetHint(player.Id, request.Category);
+    var action = room.GetHint(player.Id);
     if (!action.Accepted) return Results.BadRequest(new { error = action.Message });
     await hub.Clients.Group(room.Code).SendAsync("roomChanged");
     return Results.Ok(new { suggestion = action.Message, room = room.ToView(player.Id) });
@@ -312,7 +312,6 @@ sealed class GameHub(AuthTokenStore tokens, RoomStore rooms) : Hub
 
 record GuessRequest(int Number);
 record ClueRequest(string Text);
-record HintRequest(string Category);
 record DevLoginRequest(string Id, string DisplayName);
 record GameAction(bool Accepted, string Message);
 record AuthenticatedPlayer(string Id, string DisplayName, string? AvatarUrl);
@@ -421,16 +420,11 @@ sealed class RoomStore
 
 sealed class Room
 {
-    private static readonly Dictionary<string, string[][]> HintCards = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["hot"] = new[] { new[] { "su foto de perfil parece tomada con una papa.", "coquetea mirando al piso." }, new[] { "su sonrisa debería venir con advertencia.", "tiene más encanto que señal de Wi-Fi." }, new[] { "entra a un lugar y hasta la playlist se pone romántica.", "su mirada dura más que una canción de amor." }, new[] { "parece protagonista de una película romántica y lo sabe.", "hasta el espejo le pide una cita." } },
-        ["pareja"] = new[] { new[] { "responde 'ok' y desaparece tres días.", "dice 'ya voy' cuando todavía no se ha cambiado." }, new[] { "se roba tus papas y luego ofrece compartir las suyas.", "elige la película y se duerme a los diez minutos." }, new[] { "recuerda cómo pides el café, pero no dónde dejó las llaves.", "te guarda el último pedazo de postre (a veces)." }, new[] { "te conoce tanto que ya sabe qué vas a pedir antes que tú.", "convierte un mandado aburrido en una cita improvisada." } },
-        ["amigos"] = new[] { new[] { "dice 'cinco minutos' y aparece al día siguiente.", "nunca devuelve el recipiente, pero sí lo publica en historias." }, new[] { "siempre tiene un plan, aunque nadie sepa cuál es.", "manda audios de tres minutos para decir 'sí'." }, new[] { "comparte la comida sin preguntar cuánto te serviste.", "sabe cuándo necesitas compañía y cuándo necesitas pizza." }, new[] { "te cubriría una coartada, pero se reiría en medio de ella.", "llega con snacks y se va con tu cargador." } },
-        ["broma"] = new[] { new[] { "se ríe de sus propios chistes antes de contarlos.", "su superpoder es preguntar '¿qué?' y entender todo." }, new[] { "usa la calculadora para dividir una cuenta entre dos.", "aplaude cuando aterriza el avión." }, new[] { "hace chistes malos con tanta confianza que casi funcionan.", "podría perderse usando el GPS en línea recta." }, new[] { "convierte cualquier silencio incómodo en un show de comedia.", "podría hacer reír hasta al tutorial de términos y condiciones." } }
-    };
     private readonly object gate = new();
     private readonly Random random = new();
     private readonly List<string> clues = new();
+    private readonly HashSet<HintCard> usedHints = new();
+    private HintCard? previousHint;
     private string lastResult = "";
     private DateTimeOffset turnStartedAt;
     private DateTimeOffset? countdownEndsAt;
@@ -578,18 +572,29 @@ sealed class Room
         }
     }
 
-    public GameAction GetHint(string playerId, string category)
+    public GameAction GetHint(string playerId)
     {
         lock (gate)
         {
             if (State != "playing" || Players[activePlayerIndex].Id == playerId) return new(false, "Solo quienes dan pistas pueden pedir ayuda.");
-            if (!HintCards.TryGetValue(category ?? "", out var bands)) return new(false, "Categoría no válida.");
             if (TurnExpired()) return new(false, "Se acabó el tiempo de este turno.");
             var secret = Players[activePlayerIndex].SecretNumber;
-            var band = secret <= 3 ? 0 : secret <= 6 ? 1 : secret <= 8 ? 2 : 3;
-            var hint = bands[band][random.Next(bands[band].Length)];
-            clues.Add($"{Players.First(p => p.Id == playerId).DisplayName} (pista {category}): Es un 10, pero {hint}");
-            return new(true, hint);
+            // Select on the server using the active card, never a number/category from the browser.
+            var cards = HintCatalog.Cards.Where(card => card.Number == secret).ToArray();
+            var available = cards.Where(card => !usedHints.Contains(card)).ToArray();
+            if (available.Length == 0)
+            {
+                usedHints.RemoveWhere(card => card.Number == secret);
+                available = cards.Where(card => card != previousHint).ToArray();
+            }
+            var categories = available.Select(card => card.Category).Distinct().ToArray();
+            var category = categories[random.Next(categories.Length)];
+            var options = available.Where(card => card.Category == category).ToArray();
+            var hint = options[random.Next(options.Length)];
+            usedHints.Add(hint);
+            previousHint = hint;
+            clues.Add($"{Players.First(p => p.Id == playerId).DisplayName}: Es un 10, pero {hint.Text}");
+            return new(true, hint.Text);
         }
     }
 
