@@ -56,3 +56,18 @@
     .header-tools :is(#profile,#connection):empty{display:none}
 }
 .lobby-settings{border:1px solid #b7c9bb;border-radius:12px;padding:10px 14px;margin:12px 0;font-size:12px}.lobby-settings summary{cursor:pointer;font-weight:700;color:var(--ink)}.lobby-settings form{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;align-items:end;margin-top:12px}.lobby-settings label{display:flex;flex-direction:column;gap:6px;font-weight:600;min-width:0}.lobby-settings .input{width:100%;padding:8px;font-size:13px}.lobby-settings .button{font-size:12px;padding:10px}.lobby-settings .note{margin:12px 0 0}[data-theme="dark"] .lobby-settings{border-color:var(--theme-border)}@media(max-width:720px){.lobby-settings form{grid-template-columns:1fr 1fr}.lobby-settings{margin:8px 0;padding:8px 10px}.lobby-settings summary{font-size:11px}}
+/* Motion uses transforms and opacity; gameplay never waits for an animation. */
+@keyframes deal-in{from{opacity:0;translate:0 14px;scale:.96}to{opacity:1;translate:0 0;scale:1}}
+@keyframes card-reveal{from{opacity:.4;scale:.88 1}to{opacity:1;scale:1}}
+@keyframes celebrate{0%,100%{translate:0 0;scale:1}40%{translate:0 -8px;scale:1.04}70%{translate:0 2px;scale:.99}}
+@keyframes card-shake{0%,100%{translate:0 0}25%{translate:-5px 0}50%{translate:5px 0}75%{translate:-3px 0}}
+@keyframes count-pop{from{scale:1.18}to{scale:1}}
+@keyframes notice-in{from{opacity:0;translate:0 5px}to{opacity:1;translate:0 0}}
+.playing-card,.hero-card{animation:deal-in .38s ease-out both}
+.clue{animation:notice-in .22s ease-out both}
+.celebrate{animation:celebrate .55s ease-out both}.card-shake{animation:card-shake .3s ease-out}.card-reveal{animation:card-reveal .4s ease-out}.notice-in{animation:notice-in .25s ease-out}.count-pop{animation:count-pop .22s ease-out}
+.timer{font-variant-numeric:tabular-nums;transition:background-color .2s,color .2s}.timer.timer-urgent{background:#ffd4c7;color:#772315;outline:2px solid #d8674c}
+.numbtn,.copy-code,.sound-toggle{transition:background-color .15s,scale .15s}.numbtn:active:not(:disabled),.copy-code:active{scale:.95}.numbtn.selected{outline:2px solid var(--coral);outline-offset:1px}
+button:focus-visible{outline:3px solid var(--coral);outline-offset:3px}
+@media(max-width:720px){.top{grid-template-columns:1fr auto auto auto}.header-tools #soundToggle{grid-row:1;grid-column:2;font-size:10px;min-height:32px;padding:4px}.header-tools #themeToggle{grid-column:3}.header-tools #logout{grid-column:4}.header-tools #connection{grid-column:2 / span 3}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
