@@ -1,0 +1,50 @@
+internal sealed record ConversationCard(string Category, string Text, bool Adult = false);
+
+internal static class ConversationCatalog
+{
+    internal static readonly ConversationCard[] Cards =
+    [
+        new("hot", "¿Cuánto te atrae alguien que sabe mantener una conversación sin mirar el móvil?"),
+        new("hot", "¿Cuánto te gusta que den el primer paso para invitarte a una cita?"),
+        new("hot", "¿Qué importancia tiene para ti la química en una primera cita?"),
+        new("hot", "¿Cuánto te conquista una voz bonita?"),
+        new("hot", "¿Cuánto te gusta coquetear con indirectas?"),
+        new("hot", "¿Cuánto te atrae alguien que se ríe de sus propios nervios?"),
+        new("pareja", "¿Cuánto disfrutarías unas vacaciones en pareja sin planear nada?"),
+        new("pareja", "¿Qué importancia tiene conservar planes por separado en una relación?"),
+        new("pareja", "¿Cuánto te gustaría recibir una carta escrita a mano?"),
+        new("pareja", "¿Cuánto te molestaría que vieran sin ti el siguiente capítulo de vuestra serie?"),
+        new("pareja", "¿Cuánto te gusta celebrar los pequeños aniversarios?"),
+        new("pareja", "¿Cuánto disfrutarías cocinar juntos aunque la receta salga fatal?"),
+        new("amigos", "¿Cuánto confiarías en tus amigos para organizarte una cita a ciegas?"),
+        new("amigos", "¿Cuánto te apuntarías a un viaje sorpresa con este grupo?"),
+        new("amigos", "¿Cuánto te gusta recibir audios de cinco minutos de un amigo?"),
+        new("amigos", "¿Cuánto te molesta que un amigo llegue media hora tarde?"),
+        new("amigos", "¿Cuánto te gusta ser quien organiza los planes?"),
+        new("amigos", "¿Cuánto disfrutarías compartir piso con tus mejores amigos?"),
+        new("broma", "¿Cuánto te representa ensayar una discusión en la ducha y ganarla?"),
+        new("broma", "¿Cuánto te atreverías a cantar el menú para pedir en un restaurante?"),
+        new("broma", "¿Cuánto te reirías si tu alarma fuera tu propia voz dándote ánimos?"),
+        new("broma", "¿Cuánto te representa abrir la nevera esperando que aparezca algo nuevo?"),
+        new("broma", "¿Cuánto disfrutarías un concurso de imitaciones malísimas?"),
+        new("broma", "¿Cuánto te costaría pasar un día hablando solo con frases de películas?"),
+        new("cotidiano", "¿Cuánto necesitas diez minutos de silencio al despertarte?"),
+        new("cotidiano", "¿Cuánto placer te da cancelar un plan y quedarte en casa?"),
+        new("cotidiano", "¿Cuánto te molesta que alguien cambie tu playlist en el coche?"),
+        new("cotidiano", "¿Cuánto disfrutarías vivir un mes sin redes sociales?"),
+        new("cotidiano", "¿Cuánto te gusta probar comida que nunca has visto?"),
+        new("cotidiano", "¿Cuánto te representa dejar todo preparado la noche anterior?"),
+        new("fiesta", "¿Cuánto te gusta ser la primera persona que sale a bailar?"),
+        new("fiesta", "¿Cuánto disfrutarías una fiesta de disfraces improvisados?"),
+        new("fiesta", "¿Cuánto te apetece un karaoke aunque nadie sepa cantar?"),
+        new("fiesta", "¿Cuánto prefieres una sobremesa larga a salir de fiesta?"),
+        new("fiesta", "¿Cuánto te gustaría encargarte de la música de toda la noche?"),
+        new("fiesta", "¿Cuánto te apuntarías a ver el amanecer después de una noche con amigos?"),
+        new("+18", "¿Qué importancia tiene para ti hablar abiertamente de deseos y límites en la intimidad?", true),
+        new("+18", "¿Cuánta comodidad sientes hablando de salud sexual con una pareja adulta?", true),
+        new("+18", "¿Cuánto te atrae una escapada romántica solo para adultos?", true),
+        new("+18", "¿Cuánto te gusta que una pareja adulta te pregunte qué te hace sentir a gusto en la intimidad?", true),
+        new("+18", "¿Qué importancia tiene para ti la compatibilidad sexual en una relación adulta?", true),
+        new("+18", "¿Cuánto te gusta conversar con una pareja adulta sobre fantasías sin tener que llevarlas a la práctica?", true)
+    ];
+}

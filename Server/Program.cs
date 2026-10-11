@@ -192,6 +192,21 @@ app.MapPost("/rooms/{code}/start", async (string code, HttpContext context, Room
         : Results.BadRequest("Only the host can start a ready room.");
 }).RequireRateLimiting("api");
 
+app.MapPost("/rooms/{code}/opinion", async (string code, ConversationRequest request, HttpContext context, RoomStore rooms, AuthTokenStore tokens, IHubContext<GameHub> hub) => {
+    var player = RequirePlayer(context, tokens); if (player == null) return Results.Unauthorized();
+    var room = rooms.Get(code); if (room == null || !room.ContainsPlayer(player.Id)) return Results.NotFound();
+    var result = room.RateConversation(player.Id, request.Number, request.TurnId);
+    if (!result.Accepted) return Results.BadRequest(new { error = result.Message });
+    return await NotifyRoom(hub, room, player.Id);
+}).RequireRateLimiting("api");
+app.MapPost("/rooms/{code}/conversation-next", async (string code, ConversationControlRequest request, HttpContext context, RoomStore rooms, AuthTokenStore tokens, IHubContext<GameHub> hub) => {
+    var player = RequirePlayer(context, tokens); if (player == null) return Results.Unauthorized();
+    var room = rooms.Get(code); if (room == null || !room.ContainsPlayer(player.Id)) return Results.NotFound();
+    var result = room.ConversationControl(player.Id, request.TurnId, request.Finish);
+    if (!result.Accepted) return Results.BadRequest(new { error = result.Message });
+    return await NotifyRoom(hub, room, player.Id);
+}).RequireRateLimiting("api");
+
 app.MapPost("/rooms/{code}/guess", async (string code, GuessRequest request, HttpContext context, RoomStore rooms, AuthTokenStore tokens, IHubContext<GameHub> hub) =>
 {
     var player = RequirePlayer(context, tokens);
@@ -233,7 +248,7 @@ app.MapPost("/rooms/{code}/settings", async (string code, RoomSettingsRequest re
     if (player == null) return Results.Unauthorized();
     var room = rooms.Get(code);
     if (room == null || !room.ContainsPlayer(player.Id)) return Results.NotFound();
-    var result = room.Configure(player.Id, request.TurnSeconds, request.TargetScore);
+    var result = room.Configure(player.Id, request.TurnSeconds, request.TargetScore, request.Mode, request.Adult);
     if (!result.Accepted) return Results.BadRequest(new { error = result.Message });
     return await NotifyRoom(hub, room, player.Id);
 }).RequireRateLimiting("api");
@@ -359,7 +374,9 @@ sealed class GameHub(AuthTokenStore tokens, RoomStore rooms) : Hub
     }
 }
 
-record RoomSettingsRequest(int TurnSeconds, int TargetScore);
+record RoomSettingsRequest(int TurnSeconds, int TargetScore, string Mode = "classic", bool Adult = false);
+record ConversationRequest(int? Number, string? TurnId);
+record ConversationControlRequest(string? TurnId, bool Finish);
 record GuessRequest(int Number, string? TurnId, string? RequestId);
 record ClueRequest(string? Text, string? TurnId);
 record TurnRequest(string? TurnId);

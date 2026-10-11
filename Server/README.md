@@ -52,3 +52,11 @@ Máximo 120 peticiones HTTP por minuto por identidad/IP, tres ayudas por turno c
 - `RememberLogin.cs`: sesión recordada.
 - `wwwroot/app.js`, `styles.css`, `index.html`: interfaz.
 - `wwwroot/vendor`: cliente oficial SignalR 8.0.29 y licencia MIT.
+
+### Modo Opiniones
+
+En Ajustes del lobby el anfitrión puede elegir **Opiniones · sin puntos**. Cada persona responde del 1 al 10 a una misma pregunta o pulsa **Paso**. Las respuestas se ocultan en el servidor hasta que todos responden o termina el tiempo configurado. Después hay una pausa sin límite para conversar: el anfitrión elige **Siguiente frase** o **Terminar**. No hay respuesta correcta, puntos ni ganador.
+
+El catálogo contiene 42 preguntas: hot, pareja, amigos, broma, cotidiano, fiesta y seis preguntas +18 opcionales (desactivadas por defecto, para grupos de adultos). Se elige una categoría aleatoria y se evitan preguntas repetidas hasta agotar las disponibles. El modo clásico sigue disponible.
+
+API: `POST /rooms/{code}/opinion` recibe `{ number: 1..10 | null, turnId }` (null significa pasar); `POST /rooms/{code}/conversation-next` recibe `{ turnId, finish }` y solo admite al anfitrión tras la revelación. Los ajustes incluyen `mode` (`classic` o `conversation`) y `adult`.

@@ -18,6 +18,31 @@ static (Room Room, FakeClock Clock) Game(int count=2)
     Check(State(room)=="playing","automatic start");return(room,clock);
 }
 var tests = new Dictionary<string,Action> {
+["conversation privacy, skip, no points and host controls"] = () => {
+    var c=new FakeClock();var r=new Room("654321",new("a","Ana",null),c);r.TryAdd(new("b","Bea",null),4);
+    Check(!r.Configure("b",30,0,"conversation").Accepted,"guest cannot change mode");Check(r.Configure("a",30,10,"conversation").Accepted,"host mode");
+    r.SetReady("a");r.SetReady("b");Move(c,r,10,"a","b");var turn=Turn(r);
+    Check(View(r).GetProperty("secretNumber").ValueKind==JsonValueKind.Null,"no secret in conversation");
+    Check(!r.Guess("a",5,turn,Guid.NewGuid().ToString()).Accepted,"classic guessing blocked");Check(!r.GetHint("b",turn).Accepted,"classic hints blocked");
+    Check(!r.RateConversation("a",11,turn).Accepted,"range validated");Check(!r.RateConversation("x",5,turn).Accepted,"outsider blocked");
+    Check(r.RateConversation("a",8,turn).Accepted,"rating accepted");Check(!r.RateConversation("a",9,turn).Accepted,"cannot change rating");
+    Check(View(r,"b").GetProperty("conversation").GetProperty("responses")[0].GetProperty("value").ValueKind==JsonValueKind.Null,"ratings hidden until all respond");
+    Check(!r.ConversationControl("a",turn,false).Accepted,"cannot skip unanswered question");
+    Check(r.RateConversation("b",null,turn).Accepted,"skip accepted");Check(State(r)=="reveal","joint reveal");
+    Check(View(r,"b").GetProperty("conversation").GetProperty("responses")[0].GetProperty("value").GetInt32()==8,"revealed value");
+    Check(View(r).GetProperty("players").EnumerateArray().All(p=>p.GetProperty("score").GetInt32()==0),"no points awarded");
+    Move(c,r,10,"a","b");Check(State(r)=="reveal","discussion has no automatic advance");Check(!r.ConversationControl("b",turn,false).Accepted,"host controls advance");
+    Check(r.ConversationControl("a",turn,false).Accepted,"next question");Check(!r.RateConversation("b",4,turn).Accepted,"stale answer blocked");
+    Move(c,r,30,"a","b");Check(State(r)=="reveal","deadline reveals missing responses");
+    Check(r.ConversationControl("a",Turn(r),true).Accepted&&State(r)=="finished","host ends session");Check(r.Rematch("a"),"rematch works");
+},
+["conversation catalog and no repeated phrases"] = () => {
+    var c=new FakeClock();var r=new Room("654321",new("a","Ana",null),c);r.TryAdd(new("b","Bea",null),4);r.Configure("a",30,0,"conversation");r.SetReady("a");r.SetReady("b");Move(c,r,10,"a","b");
+    var seen=new HashSet<string>();
+    for(int i=0;i<36;i++){var prompt=View(r).GetProperty("conversation").GetProperty("prompt");Check(!prompt.GetProperty("Adult").GetBoolean(),"adult excluded by default");Check(seen.Add(prompt.GetProperty("Text").GetString()!),"no phrase repeats before deck exhausted");r.RateConversation("a",5,Turn(r));r.RateConversation("b",7,Turn(r));r.ConversationControl("a",Turn(r),false);}
+    r.RateConversation("a",5,Turn(r));r.RateConversation("b",7,Turn(r));r.ConversationControl("a",Turn(r),true);r.Rematch("a");r.Configure("a",30,0,"conversation",true);r.SetReady("a");r.SetReady("b");Move(c,r,10,"a","b");
+    bool adultSeen=false;for(int i=0;i<42;i++){adultSeen|=View(r).GetProperty("conversation").GetProperty("prompt").GetProperty("Adult").GetBoolean();r.RateConversation("a",5,Turn(r));r.RateConversation("b",7,Turn(r));r.ConversationControl("a",Turn(r),false);}Check(adultSeen,"adult enabled includes adult prompts");
+},
 ["reconnect, privacy and duplicate attempts"] = () => {
     var (r,c)=Game(); Check(r.TryAdd(new("a","Ana",null),4),"reconnect existing during play");Check(!r.TryAdd(new("x","Extra",null),4),"block new midgame");
     Check(View(r).GetProperty("secretNumber").ValueKind==JsonValueKind.Null,"guesser hidden");

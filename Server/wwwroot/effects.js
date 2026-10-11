@@ -12,6 +12,7 @@ const gameEffects=(()=>{
     function animate(selector,name){const element=document.querySelector(selector);if(!element||motion.matches||document.hidden)return;element.classList.remove(name);void element.offsetWidth;element.classList.add(name);element.addEventListener('animationend',()=>element.classList.remove(name),{once:true})}
     function receive(previous,current){
         if(!previous||previous.code!==current.code||previous.version===current.version)return;
+        if(current.settings.mode==='conversation'){if(current.state==='reveal'&&previous.state!=='reveal')play('near');else if(current.turnId!==previous.turnId)play('start');return}
         if(current.state==='finished'&&previous.state!=='finished'){play('finish');animate('.finished .title','celebrate');return}
         if(current.state==='playing'&&(previous.state!=='playing'||previous.turnId!==current.turnId)){play('start');return}
         if(current.turnId!==previous.turnId)return;

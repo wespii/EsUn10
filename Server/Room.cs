@@ -15,6 +15,11 @@ sealed class Room
     private HintCard? previousHint;
     private int activeIndex, secret, round = 1, hintsUsed;
     private int turnSeconds = 90, targetScore;
+    private string mode = "classic";
+    private bool adult;
+    private ConversationCard? prompt;
+    private readonly HashSet<ConversationCard> usedPrompts = new();
+    private readonly Dictionary<string, int?> ratings = new();
     private long version = 1;
     private DateTimeOffset turnStartedAt, lastHintAt = DateTimeOffset.MinValue;
     private DateTimeOffset? countdownEndsAt, revealEndsAt;
@@ -63,17 +68,19 @@ sealed class Room
             UpdateCountdown(); version++; return true;
         }
     }
-    public GameAction Configure(string id, int seconds, int points)
+    public GameAction Configure(string id, int seconds, int points, string mode = "classic", bool adult = false)
     {
         lock (gate)
         {
             Tick();
             if (state != "lobby" || id != HostId || !ContainsPlayer(id))
                 return new(false, "Solo el anfitrión puede configurar la mesa antes de empezar.");
+            if (mode is not ("classic" or "conversation")) return new(false, "Modo no válido.");
+            if (mode == "conversation") points = 0;
             if (seconds is < 30 or > 300 || points is < 0 or > 100)
                 return new(false, "El tiempo debe estar entre 30 y 300 segundos y la meta entre 1 y 100 puntos (0 para tres vueltas).");
-            if (turnSeconds == seconds && targetScore == points) return new(true, "Ajustes guardados.");
-            turnSeconds = seconds; targetScore = points; countdownEndsAt = null;
+            if (turnSeconds == seconds && targetScore == points && this.mode == mode && this.adult == adult) return new(true, "Ajustes guardados.");
+            turnSeconds = seconds; targetScore = points; this.mode = mode; this.adult = adult; countdownEndsAt = null;
             foreach (var player in players) player.Ready = false;
             Touch(id); version++;
             return new(true, "Ajustes guardados. Todos deben volver a marcarse listos.");
@@ -91,6 +98,7 @@ sealed class Room
             if (state is "playing" or "reveal")
             {
                 if (players.Count(x => !x.Left) < 2) Finish("La mesa terminó: quedan menos de dos jugadores.");
+                else if (mode == "conversation") RevealIfAllAnswered();
                 else if (state == "playing" && players[activeIndex] == p) Reveal("El jugador abandonó la mesa. Turno omitido.", 0);
             }
             return true;
@@ -139,14 +147,16 @@ sealed class Room
             }
             if (state == "playing")
             {
-                if (Now - players[activeIndex].LastSeen >= TimeSpan.FromSeconds(60)) Reveal("No volvió a tiempo. Turno omitido.", 0);
+                if (mode == "conversation") { if (Now >= turnStartedAt.AddSeconds(turnSeconds)) RevealConversation(); else RevealIfAllAnswered(); }
+                else if (Now - players[activeIndex].LastSeen >= TimeSpan.FromSeconds(60)) Reveal("No volvió a tiempo. Turno omitido.", 0);
                 else if (Now >= turnStartedAt.AddSeconds(turnSeconds)) Reveal("Se acabó el tiempo.", 0);
             }
-            if (state == "reveal" && revealEndsAt <= Now) NextTurn();
+            if (mode == "classic" && state == "reveal" && revealEndsAt <= Now) NextTurn();
         }
     }
     private void BeginTurn()
     {
+        if (mode == "conversation") { BeginConversation(); return; }
         state = "playing"; turnId = Guid.NewGuid().ToString("N"); secret = DrawNumber();
         turnStartedAt = Now; revealEndsAt = null; result = ""; hintsUsed = 0; lastHintAt = DateTimeOffset.MinValue;
         tried.Clear(); requests.Clear(); clues.Clear(); turnHints.Clear(); feedbackVoters.Clear(); version++;
@@ -203,12 +213,51 @@ sealed class Room
             return true;
         }
     }
+    private void BeginConversation()
+    {
+        var eligible = ConversationCatalog.Cards.Where(c => adult || !c.Adult).ToArray();
+        var available = eligible.Where(c => !usedPrompts.Contains(c)).ToArray();
+        if (available.Length == 0) { usedPrompts.Clear(); available = eligible.Where(c => c != prompt).ToArray(); }
+        var categories = available.Select(c => c.Category).Distinct().ToArray();
+        var category = categories[RandomNumberGenerator.GetInt32(categories.Length)];
+        var options = available.Where(c => c.Category == category).ToArray();
+        prompt = options[RandomNumberGenerator.GetInt32(options.Length)]; usedPrompts.Add(prompt);
+        ratings.Clear(); tried.Clear(); clues.Clear(); turnHints.Clear(); feedbackVoters.Clear(); result = ""; state = "playing";
+        turnId = Guid.NewGuid().ToString("N"); turnStartedAt = Now; revealEndsAt = null; version++;
+    }
+    private void RevealIfAllAnswered()
+    {
+        if (state == "playing" && players.Where(p => !p.Left).All(p => ratings.ContainsKey(p.Id))) RevealConversation();
+    }
+    private void RevealConversation() { state = "reveal"; result = "Cada opinión cuenta. Comentad vuestras respuestas."; revealEndsAt = null; version++; }
+    public GameAction RateConversation(string id, int? number, string? expectedTurn)
+    {
+        lock (gate)
+        {
+            Tick();
+            if (mode != "conversation" || state != "playing" || expectedTurn != turnId || !Touch(id)) return new(false, "Esta pregunta ya terminó.");
+            if (number is < 1 or > 10 || ratings.ContainsKey(id)) return new(false, "Respuesta no válida o ya enviada.");
+            ratings[id] = number; version++; RevealIfAllAnswered(); return new(true, "Respuesta guardada.");
+        }
+    }
+    public GameAction ConversationControl(string id, string? expectedTurn, bool finish)
+    {
+        lock (gate)
+        {
+            Tick();
+            if (mode != "conversation" || id != HostId || !ContainsPlayer(id) || expectedTurn != turnId || state != "reveal") return new(false, "Solo el anfitrión puede continuar tras revelar las respuestas.");
+            Touch(id);
+            if (finish) Finish("Gracias por compartir. Aquí no hay ganadores ni puntos.");
+            else { round++; BeginConversation(); }
+            return new(true, "Mesa actualizada.");
+        }
+    }
     public GameAction Guess(string id, int number, string? expectedTurn, string? requestId)
     {
         lock (gate)
         {
             Tick();
-            if (!Touch(id) || state != "playing" || players[activeIndex].Id != id || expectedTurn != turnId) return new(false, "Ese turno ya terminó o no te corresponde.");
+            if (mode != "classic" || !Touch(id) || state != "playing" || players[activeIndex].Id != id || expectedTurn != turnId) return new(false, "Ese turno ya terminó o no te corresponde.");
             if (number is < 1 or > 10 || !Guid.TryParse(requestId, out _)) return new(false, "Intento no válido.");
             if (requests.Contains(requestId!) || tried.Contains(number)) return new(false, "Ese intento ya se procesó. Elige otro número.");
             requests.Add(requestId!); tried.Add(number);
@@ -234,7 +283,7 @@ sealed class Room
             clues.Add($"{p.DisplayName}: Es un 10, pero {safe}"); version++; return new(true, "Pista enviada.");
         }
     }
-    private bool CanClue(string id, string? expectedTurn) => Touch(id) && state == "playing" && players[activeIndex].Id != id && expectedTurn == turnId;
+    private bool CanClue(string id, string? expectedTurn) => mode == "classic" && Touch(id) && state == "playing" && players[activeIndex].Id != id && expectedTurn == turnId;
     public GameAction GetHint(string id, string? expectedTurn)
     {
         lock (gate)
@@ -260,7 +309,7 @@ sealed class Room
     {
         lock (gate)
         {
-            if (state != "reveal" || expectedTurn != turnId || players[activeIndex].Id != id || turnHints.Count == 0 || !feedbackVoters.Add(id)) return null;
+            if (mode != "classic" || state != "reveal" || expectedTurn != turnId || players[activeIndex].Id != id || turnHints.Count == 0 || !feedbackVoters.Add(id)) return null;
             version++; return turnHints.ToArray();
         }
     }
@@ -269,14 +318,15 @@ sealed class Room
         lock (gate)
         {
             Tick();
-            var active = state is "playing" or "reveal" ? players[activeIndex].Id : null;
+            var active = mode == "classic" && (state is "playing" or "reveal") ? players[activeIndex].Id : null;
             return new {
-                code = Code, state, version, serverTime = Now, hostId = HostId, round = targetScore == 0 ? Math.Min(round, 3) : round, totalRounds = targetScore == 0 ? (int?)3 : null,
-                settings = new { turnSeconds, targetScore },
+                code = Code, state, version, serverTime = Now, hostId = HostId, round = mode == "classic" && targetScore == 0 ? Math.Min(round, 3) : round, totalRounds = mode == "classic" && targetScore == 0 ? (int?)3 : null,
+                settings = new { turnSeconds, targetScore, mode, adult },
+                conversation = mode == "conversation" && (state is "playing" or "reveal") ? new { prompt, answered = ratings.ContainsKey(viewerId), ownRating = ratings.GetValueOrDefault(viewerId), responses = players.Where(p => !p.Left).Select(p => new { id = p.Id, answered = ratings.ContainsKey(p.Id), value = state == "reveal" ? ratings.GetValueOrDefault(p.Id) : null }).ToArray() } : null,
                 turnId, countdownEndsAt, revealEndsAt, activePlayerId = active, viewerIsGuesser = viewerId == active,
                 guessesRemaining = 3 - tried.Count, triedNumbers = tried.ToArray(), turnStartedAt,
                 deadline = state == "playing" ? turnStartedAt.AddSeconds(turnSeconds) : (DateTimeOffset?)null,
-                secretNumber = state == "reveal" || (state == "playing" && viewerId != active) ? (int?)secret : null,
+                secretNumber = mode == "classic" && (state == "reveal" || (state == "playing" && viewerId != active)) ? (int?)secret : null,
                 lastResult = result, clues = clues.ToArray(), hintsRemaining = 3 - hintsUsed,
                 nextHintAt = lastHintAt == DateTimeOffset.MinValue ? (DateTimeOffset?)null : lastHintAt.AddSeconds(8),
                 canRateHints = state == "reveal" && viewerId == active && turnHints.Count > 0 && !feedbackVoters.Contains(viewerId),
