@@ -34,7 +34,7 @@ Los estados son `lobby`, `playing`, `reveal` y `finished`. Cada vista incluye un
 
 ## Tiempo real y límites
 
-Hub `/realtime`: `JoinRoom(code)`, `LeaveRoom()` y `Pulse(code)`. El navegador se autentica con su cookie; Unity puede usar su token. El único evento compartido es `roomChanged(code)`; cada cliente consulta su propia vista filtrada. No se difunden cartas o estados personalizados al grupo.
+Hub `/realtime`: `JoinRoom(code)`, `LeaveRoom()` y `Pulse(code)`. El navegador se autentica con su cookie; Unity puede usar su token. El evento `roomState` entrega a cada jugador su vista filtrada mediante un grupo privado. No se difunden cartas ni respuestas privadas al grupo completo de la mesa.
 
 SignalR avisa de los cambios. Una señal cada 10 segundos mantiene la presencia; una consulta de respaldo cada 30 segundos recupera eventos perdidos. Los fallos usan reintentos progresivos. El campo de pista y el historial no se reconstruyen con cada evento.
 
@@ -57,6 +57,10 @@ Máximo 120 peticiones HTTP por minuto por identidad/IP, tres ayudas por turno c
 
 En Ajustes del lobby el anfitrión puede elegir **Opiniones · sin puntos**. Cada persona responde del 1 al 10 a una misma pregunta o pulsa **Paso**. Las respuestas se ocultan en el servidor hasta que todos responden o termina el tiempo configurado. Después hay una pausa sin límite para conversar: el anfitrión elige **Siguiente frase** o **Terminar**. No hay respuesta correcta, puntos ni ganador.
 
-El catálogo contiene 42 preguntas: hot, pareja, amigos, broma, cotidiano, fiesta y seis preguntas +18 opcionales (desactivadas por defecto, para grupos de adultos). Se elige una categoría aleatoria y se evitan preguntas repetidas hasta agotar las disponibles. El modo clásico sigue disponible.
+El catálogo contiene las 400 características suministradas en los dos TXT del proyecto: cotidiano, pareja, fiesta, broma, red flags, convivencia, vida digital, dinero y dos categorías +18 opcionales (desactivadas por defecto, para grupos de adultos). La dinámica es «Es un 10, pero…»: dar de 1 (muy mala) a 10 (excelente) a una persona hipotética con esa característica. Se elige una categoría aleatoria y se evitan preguntas repetidas hasta agotar las disponibles. El modo clásico sigue disponible.
 
 API: `POST /rooms/{code}/opinion` recibe `{ number: 1..10 | null, turnId }` (null significa pasar); `POST /rooms/{code}/conversation-next` recibe `{ turnId, finish }` y solo admite al anfitrión tras la revelación. Los ajustes incluyen `mode` (`classic` o `conversation`) y `adult`.
+
+Los cambios de estado se envían mediante SignalR como `roomState`, a un grupo privado por mesa y jugador. Se construye cada vista bajo el bloqueo de la mesa para mantener juntas las versiones y ocultar números secretos y respuestas ajenas. El cliente conserva una consulta de recuperación periódica y descarta versiones antiguas.
+
+Los ajustes del lobby se guardan automáticamente al elegir opciones o tras una pausa breve al escribir números. El anfitrión ve el estado de guardado; no puede marcarse listo con ajustes pendientes o inválidos.

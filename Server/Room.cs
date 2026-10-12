@@ -313,6 +313,14 @@ sealed class Room
             version++; return turnHints.ToArray();
         }
     }
+    public (string Id, object View)[] MemberViews()
+    {
+        lock (gate)
+        {
+            Tick();
+            return players.Where(p => !p.Left).Select(p => (p.Id, ToView(p.Id))).ToArray();
+        }
+    }
     public object ToView(string viewerId)
     {
         lock (gate)

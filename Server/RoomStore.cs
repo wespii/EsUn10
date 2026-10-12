@@ -55,7 +55,7 @@ sealed class RoomMaintenance(RoomStore rooms, IHubContext<GameHub> hub, DeviceLo
                     var version = room.Version;
                     if (!publishedVersions.TryGetValue(room.Code, out var published) || version != published)
                     {
-                        await hub.Clients.Group(room.Code).SendAsync("roomChanged", room.Code, stoppingToken);
+                        await GameUpdates.Publish(hub, room, stoppingToken);
                         publishedVersions[room.Code] = version;
                     }
                 }

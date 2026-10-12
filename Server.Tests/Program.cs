@@ -25,7 +25,10 @@ var tests = new Dictionary<string,Action> {
     Check(View(r).GetProperty("secretNumber").ValueKind==JsonValueKind.Null,"no secret in conversation");
     Check(!r.Guess("a",5,turn,Guid.NewGuid().ToString()).Accepted,"classic guessing blocked");Check(!r.GetHint("b",turn).Accepted,"classic hints blocked");
     Check(!r.RateConversation("a",11,turn).Accepted,"range validated");Check(!r.RateConversation("x",5,turn).Accepted,"outsider blocked");
-    Check(r.RateConversation("a",8,turn).Accepted,"rating accepted");Check(!r.RateConversation("a",9,turn).Accepted,"cannot change rating");
+    Check(r.RateConversation("a",8,turn).Accepted,"rating accepted");
+    var privateViews=r.MemberViews().ToDictionary(v=>v.Id,v=>JsonSerializer.SerializeToElement(v.View));
+    Check(privateViews["a"].GetProperty("conversation").GetProperty("ownRating").GetInt32()==8,"author private pushed rating");
+    Check(privateViews["b"].GetProperty("conversation").GetProperty("ownRating").ValueKind==JsonValueKind.Null,"guest pushed view hides author rating");Check(!r.RateConversation("a",9,turn).Accepted,"cannot change rating");
     Check(View(r,"b").GetProperty("conversation").GetProperty("responses")[0].GetProperty("value").ValueKind==JsonValueKind.Null,"ratings hidden until all respond");
     Check(!r.ConversationControl("a",turn,false).Accepted,"cannot skip unanswered question");
     Check(r.RateConversation("b",null,turn).Accepted,"skip accepted");Check(State(r)=="reveal","joint reveal");
@@ -38,10 +41,11 @@ var tests = new Dictionary<string,Action> {
 },
 ["conversation catalog and no repeated phrases"] = () => {
     var c=new FakeClock();var r=new Room("654321",new("a","Ana",null),c);r.TryAdd(new("b","Bea",null),4);r.Configure("a",30,0,"conversation");r.SetReady("a");r.SetReady("b");Move(c,r,10,"a","b");
+    Check(ConversationCatalog.Cards.Length==400,"400 supplied phrases");Check(ConversationCatalog.Cards.Select(card=>card.Category).Distinct().Count()==10,"source categories");
     var seen=new HashSet<string>();
-    for(int i=0;i<36;i++){var prompt=View(r).GetProperty("conversation").GetProperty("prompt");Check(!prompt.GetProperty("Adult").GetBoolean(),"adult excluded by default");Check(seen.Add(prompt.GetProperty("Text").GetString()!),"no phrase repeats before deck exhausted");r.RateConversation("a",5,Turn(r));r.RateConversation("b",7,Turn(r));r.ConversationControl("a",Turn(r),false);}
+    for(int i=0;i<ConversationCatalog.Cards.Count(card=>!card.Adult);i++){var prompt=View(r).GetProperty("conversation").GetProperty("prompt");Check(!prompt.GetProperty("Adult").GetBoolean(),"adult excluded by default");Check(seen.Add(prompt.GetProperty("Text").GetString()!),"no phrase repeats before deck exhausted");r.RateConversation("a",5,Turn(r));r.RateConversation("b",7,Turn(r));r.ConversationControl("a",Turn(r),false);}
     r.RateConversation("a",5,Turn(r));r.RateConversation("b",7,Turn(r));r.ConversationControl("a",Turn(r),true);r.Rematch("a");r.Configure("a",30,0,"conversation",true);r.SetReady("a");r.SetReady("b");Move(c,r,10,"a","b");
-    bool adultSeen=false;for(int i=0;i<42;i++){adultSeen|=View(r).GetProperty("conversation").GetProperty("prompt").GetProperty("Adult").GetBoolean();r.RateConversation("a",5,Turn(r));r.RateConversation("b",7,Turn(r));r.ConversationControl("a",Turn(r),false);}Check(adultSeen,"adult enabled includes adult prompts");
+    bool adultSeen=false;for(int i=0;i<ConversationCatalog.Cards.Length;i++){adultSeen|=View(r).GetProperty("conversation").GetProperty("prompt").GetProperty("Adult").GetBoolean();r.RateConversation("a",5,Turn(r));r.RateConversation("b",7,Turn(r));r.ConversationControl("a",Turn(r),false);}Check(adultSeen,"adult enabled includes adult prompts");
 },
 ["reconnect, privacy and duplicate attempts"] = () => {
     var (r,c)=Game(); Check(r.TryAdd(new("a","Ana",null),4),"reconnect existing during play");Check(!r.TryAdd(new("x","Extra",null),4),"block new midgame");

@@ -143,7 +143,7 @@ app.MapPost("/rooms", async (HttpContext context, RoomStore rooms, AuthTokenStor
     var player = RequirePlayer(context, tokens);
     if (player == null) return Results.Unauthorized();
     var room = rooms.Create(player);
-    await hub.Clients.Group(room.Code).SendAsync("roomChanged", room.Code);
+    await GameUpdates.Publish(hub, room);
     return Results.Ok(room.ToView(player.Id));
 }).RequireRateLimiting("api");
 
@@ -180,7 +180,7 @@ app.MapPost("/rooms/{code}/leave", async (string code, HttpContext context, Room
     if (player == null) return Results.Unauthorized();
     // Leaving is idempotent: a lost response or an expired room must not trap the client.
     rooms.Leave(code, player.Id);
-    await hub.Clients.Group(code).SendAsync("roomChanged", code);
+    if (rooms.Get(code) is { } remaining) await GameUpdates.Publish(hub, remaining);
     return Results.Ok(new { status = "left" });
 }).RequireRateLimiting("api");
 
@@ -216,7 +216,7 @@ app.MapPost("/rooms/{code}/guess", async (string code, GuessRequest request, Htt
     if (room == null || !room.ContainsPlayer(player.Id)) return Results.NotFound();
     var action = room.Guess(player.Id, request.Number, request.TurnId, request.RequestId);
     if (!action.Accepted) return Results.BadRequest(new { error = action.Message });
-    await hub.Clients.Group(room.Code).SendAsync("roomChanged", room.Code);
+    await GameUpdates.Publish(hub, room);
     return Results.Ok(new { status = action.Message, room = room.ToView(player.Id) });
 }).RequireRateLimiting("api");
 
@@ -228,7 +228,7 @@ app.MapPost("/rooms/{code}/clue", async (string code, ClueRequest request, HttpC
     if (room == null || !room.ContainsPlayer(player.Id)) return Results.NotFound();
     var action = room.AddClue(player.Id, request.Text, request.TurnId);
     if (!action.Accepted) return Results.BadRequest(new { error = action.Message });
-    await hub.Clients.Group(room.Code).SendAsync("roomChanged", room.Code);
+    await GameUpdates.Publish(hub, room);
     return Results.Ok(room.ToView(player.Id));
 }).RequireRateLimiting("api");
 
@@ -240,7 +240,7 @@ app.MapPost("/rooms/{code}/hint", async (string code, TurnRequest request, HttpC
     if (room == null || !room.ContainsPlayer(player.Id)) return Results.NotFound();
     var action = room.GetHint(player.Id, request.TurnId);
     if (!action.Accepted) return Results.BadRequest(new { error = action.Message });
-    await hub.Clients.Group(room.Code).SendAsync("roomChanged", room.Code);
+    await GameUpdates.Publish(hub, room);
     return Results.Ok(new { suggestion = action.Message, room = room.ToView(player.Id) });
 }).RequireRateLimiting("api");
 
@@ -290,7 +290,7 @@ static AuthenticatedPlayer? RequirePlayer(HttpContext context, AuthTokenStore to
 static async Task<IResult> NotifyRoom(IHubContext<GameHub> hub, Room room, string viewerId)
 {
     var view = room.ToView(viewerId);
-    await hub.Clients.Group(room.Code).SendAsync("roomChanged", room.Code);
+    await GameUpdates.Publish(hub, room);
     return Results.Ok(view);
 }
 
@@ -362,12 +362,22 @@ sealed class GameHub(AuthTokenStore tokens, RoomStore rooms) : Hub
     {
         var id = Context.Items["playerId"] as string;
         if (id == null || rooms.Get(code)?.Touch(id) != true) throw new HubException("La mesa ya no está disponible.");
-        if (Context.Items["room"] is string previous) await Groups.RemoveFromGroupAsync(Context.ConnectionId, previous);
+        if (Context.Items["room"] is string previous) {
+            await Groups.RemoveFromGroupAsync(Context.ConnectionId, previous);
+            await Groups.RemoveFromGroupAsync(Context.ConnectionId, GameUpdates.PlayerGroup(previous, id));
+        }
         Context.Items["room"] = code.ToUpperInvariant();
         await Groups.AddToGroupAsync(Context.ConnectionId, code.ToUpperInvariant());
-        await Clients.Group(code.ToUpperInvariant()).SendAsync("roomChanged", code.ToUpperInvariant());
+        await Groups.AddToGroupAsync(Context.ConnectionId, GameUpdates.PlayerGroup(code.ToUpperInvariant(), id));
+        await Clients.Caller.SendAsync("roomState", rooms.Get(code)!.ToView(id));
     }
-    public Task LeaveRoom() => Context.Items["room"] is string code ? Groups.RemoveFromGroupAsync(Context.ConnectionId, code) : Task.CompletedTask;
+    public async Task LeaveRoom()
+    {
+        if (Context.Items["room"] is not string code) return;
+        await Groups.RemoveFromGroupAsync(Context.ConnectionId, code);
+        if (Context.Items["playerId"] is string id) await Groups.RemoveFromGroupAsync(Context.ConnectionId, GameUpdates.PlayerGroup(code, id));
+        Context.Items.Remove("room");
+    }
     public void Pulse(string code)
     {
         var id = Context.Items["playerId"] as string;
