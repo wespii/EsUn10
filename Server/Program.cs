@@ -178,7 +178,8 @@ app.MapPost("/rooms/{code}/leave", async (string code, HttpContext context, Room
 {
     var player = RequirePlayer(context, tokens);
     if (player == null) return Results.Unauthorized();
-    if (!rooms.Leave(code, player.Id)) return Results.BadRequest(new { error = "La mesa ya no está disponible." });
+    // Leaving is idempotent: a lost response or an expired room must not trap the client.
+    rooms.Leave(code, player.Id);
     await hub.Clients.Group(code).SendAsync("roomChanged", code);
     return Results.Ok(new { status = "left" });
 }).RequireRateLimiting("api");

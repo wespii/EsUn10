@@ -1,6 +1,7 @@
 'use strict';
 const app=document.querySelector('#app'),loginMarkup=app.innerHTML;
 let me=null,room=null,roomCode='',selected=0,clueDraft='',timer=null;
+let leaving=false;
 let busy=false,connection=null,connecting=false,retryTimer=null,retryDelay=1000;
 let refreshing=false,refreshAgain=false,generation=0,serverOffset=0,renderKey='',clueCount=0;
 const savedKey='esun10.room';
@@ -113,7 +114,7 @@ function uiTick(){
     const hint=document.querySelector('#hintButton');if(hint){const wait=room.nextHintAt?Math.max(0,Math.ceil((Date.parse(room.nextHintAt)-serverNow())/1000)):0;hint.disabled=busy||room.hintsRemaining===0||wait>0;document.querySelector('#hintStatus').textContent=room.hintsRemaining===0?'Ya usasteis las tres ayudas. Ahora le toca al grupo.':wait?`Otra ayuda en ${wait}s · quedan ${room.hintsRemaining}`:`Quedan ${room.hintsRemaining} ayudas para este turno.`}
 }
 async function action(path,body={},onSuccess){
-    if(busy||!roomCode)return;busy=true;const code=roomCode,epoch=generation;
+    if(leaving||busy||!roomCode)return;busy=true;const code=roomCode,epoch=generation;
     if(room.state==='playing')patchGame();
     try{const response=await api(`/rooms/${code}/${path}`,'POST',body);if(epoch!==generation||code!==roomCode)return;onSuccess?.();receive(response.room||response)}
     catch(error){if(epoch===generation)showError(error.status===401?'La sesión terminó. Recarga para volver a entrar.':error)}
@@ -128,21 +129,34 @@ function rematch(){return action('rematch')}
 function ready(){gameEffects.unlock();return action('ready')}
 async function openRoom(updated){
     settingsDraft=null;generation++;roomCode=updated.code;room=null;renderKey='';saveRoom(roomCode);receive(updated);
-    await connect();if(connection?.state==='Connected')await connection.invoke('JoinRoom',roomCode);await refreshRoom();
+    const epoch=generation,code=roomCode;await connect();
+    if(epoch!==generation||leaving||code!==roomCode)return;
+    if(connection?.state==='Connected')await connection.invoke('JoinRoom',code);
+    if(epoch===generation&&!leaving)await refreshRoom();
 }
 async function createRoom(){if(busy)return;busy=true;try{await openRoom(await api('/rooms','POST',{}))}catch(e){showError(e)}finally{busy=false}}
 async function joinRoom(){if(busy)return;busy=true;try{const code=document.querySelector('#joinCode').value.trim();await openRoom(await api(`/rooms/${encodeURIComponent(code)}/join`,'POST',{}))}catch(e){showError(e)}finally{busy=false}}
 async function leave(){
-    if(busy||!roomCode)return;busy=true;
-    try{await api(`/rooms/${roomCode}/leave`,'POST',{});await clearRoom();renderHome()}catch(e){if(e.status===404){await clearRoom();renderHome()}else showError(e)}finally{busy=false}
+    if(leaving||!roomCode)return;
+    leaving=true;busy=true;generation++;const code=roomCode;
+    connectionStatus('Saliendo…');
+    try{await api(`/rooms/${code}/leave`,'POST',{});clearRoom();renderHome()}
+    catch(e){if(e.status===404){clearRoom();renderHome()}else{showError(e);connectionStatus('No se pudo salir. Inténtalo de nuevo.')}}
+    finally{leaving=false;busy=false;}
 }
-async function clearRoom(){settingsDraft=null;generation++;room=null;roomCode='';renderKey='';saveRoom('');if(connection?.state==='Connected')await connection.invoke('LeaveRoom').catch(()=>{});connectionStatus('')}
+function clearRoom(){
+    settingsDraft=null;generation++;room=null;roomCode='';renderKey='';saveRoom('');
+    clearTimeout(retryTimer);retryTimer=null;refreshAgain=false;
+    // Membership is already removed by HTTP. Socket cleanup must not hold the UI.
+    if(connection?.state==='Connected')void connection.invoke('LeaveRoom').catch(()=>{});
+    connectionStatus('');
+}
 async function logout(){
     if(busy)return;busy=true;
     try{if(roomCode)await api(`/rooms/${roomCode}/leave`,'POST',{}).catch(()=>{});await api('/auth/logout','POST',{});await clearRoom();await connection?.stop();location.reload()}catch(e){showError(e)}finally{busy=false}
 }
 async function refreshRoom(){
-    if(!roomCode)return;if(refreshing){refreshAgain=true;return}refreshing=true;
+    if(leaving||!roomCode)return;if(refreshing){refreshAgain=true;return}refreshing=true;
     const code=roomCode,epoch=generation;
     try{const updated=await api(`/rooms/${code}`);if(epoch===generation&&code===roomCode){receive(updated);retryDelay=1000;connectionStatus(connection?.state==='Connected'?'En línea':'Reconectando…')}}
     catch(e){if(epoch!==generation)return;if(e.status===404){await clearRoom();renderHome();showError('Esta mesa terminó o caducó. Si el servidor se reinició, crea una mesa nueva. Tu sesión sigue iniciada.')}else if(e.status===401){await clearRoom();me=null;app.className='';app.innerHTML=loginMarkup;document.querySelector('#logout').hidden=true;showError('Vuelve a vincular Discord para continuar.')}else{connectionStatus('Reconectando…');scheduleRetry()}}
