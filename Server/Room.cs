@@ -14,11 +14,13 @@ sealed class Room
     private readonly Queue<int> numberDeck = new();
     private HintCard? previousHint;
     private int activeIndex, secret, round = 1, hintsUsed;
-    private int turnSeconds = 90, targetScore;
+    private int turnSeconds = 90, targetScore, maxPlayers = 4;
     private string mode = "classic";
     private bool adult;
     private ConversationCard? prompt;
     private readonly HashSet<ConversationCard> usedPrompts = new();
+    private readonly Queue<ConversationCard> promptDeck = new();
+    private bool? promptDeckAdult;
     private readonly Dictionary<string, int?> ratings = new();
     private long version = 1;
     private DateTimeOffset turnStartedAt, lastHintAt = DateTimeOffset.MinValue;
@@ -53,7 +55,7 @@ sealed class Room
         lock (gate)
         {
             if (ContainsPlayer(player.Id)) return Touch(player.Id);
-            if (state != "lobby" || players.Count >= max) return false;
+            if (state != "lobby" || players.Count >= Math.Min(max, maxPlayers)) return false;
             players.Add(new(player, Now)); LastActivity = Now; TransferHost(); UpdateCountdown(); version++;
             return true;
         }
@@ -68,19 +70,20 @@ sealed class Room
             UpdateCountdown(); version++; return true;
         }
     }
-    public GameAction Configure(string id, int seconds, int points, string mode = "classic", bool adult = false)
+    public GameAction Configure(string id, int seconds, int points, string mode = "classic", bool adult = false, int maxPlayers = 4)
     {
         lock (gate)
         {
             Tick();
             if (state != "lobby" || id != HostId || !ContainsPlayer(id))
                 return new(false, "Solo el anfitrión puede configurar la mesa antes de empezar.");
+            if (maxPlayers is < 2 or > 8 || maxPlayers < players.Count(p => !p.Left)) return new(false, "El límite de jugadores debe estar entre 2 y 8 y no puede ser menor que los participantes actuales.");
             if (mode is not ("classic" or "conversation")) return new(false, "Modo no válido.");
             if (mode == "conversation") points = 0;
             if (seconds is < 30 or > 300 || points is < 0 or > 100)
                 return new(false, "El tiempo debe estar entre 30 y 300 segundos y la meta entre 1 y 100 puntos (0 para tres vueltas).");
-            if (turnSeconds == seconds && targetScore == points && this.mode == mode && this.adult == adult) return new(true, "Ajustes guardados.");
-            turnSeconds = seconds; targetScore = points; this.mode = mode; this.adult = adult; countdownEndsAt = null;
+            if (turnSeconds == seconds && targetScore == points && this.mode == mode && this.adult == adult && this.maxPlayers == maxPlayers) return new(true, "Ajustes guardados.");
+            turnSeconds = seconds; targetScore = points; this.mode = mode; this.adult = adult; this.maxPlayers = maxPlayers; countdownEndsAt = null;
             foreach (var player in players) player.Ready = false;
             Touch(id); version++;
             return new(true, "Ajustes guardados. Todos deben volver a marcarse listos.");
@@ -215,15 +218,33 @@ sealed class Room
     }
     private void BeginConversation()
     {
-        var eligible = ConversationCatalog.Cards.Where(c => adult || !c.Adult).ToArray();
-        var available = eligible.Where(c => !usedPrompts.Contains(c)).ToArray();
-        if (available.Length == 0) { usedPrompts.Clear(); available = eligible.Where(c => c != prompt).ToArray(); }
-        var categories = available.Select(c => c.Category).Distinct().ToArray();
-        var category = categories[RandomNumberGenerator.GetInt32(categories.Length)];
-        var options = available.Where(c => c.Category == category).ToArray();
-        prompt = options[RandomNumberGenerator.GetInt32(options.Length)]; usedPrompts.Add(prompt);
+        prompt = DrawPrompt();
         ratings.Clear(); tried.Clear(); clues.Clear(); turnHints.Clear(); feedbackVoters.Clear(); result = ""; state = "playing";
         turnId = Guid.NewGuid().ToString("N"); turnStartedAt = Now; revealEndsAt = null; version++;
+    }
+    private ConversationCard DrawPrompt()
+    {
+        // Rebuild only when the eligible set changes, preserving the current
+        // cycle's history across rematches and changes to the +18 option.
+        if (promptDeckAdult != adult) { promptDeck.Clear(); promptDeckAdult = adult; }
+        if (promptDeck.Count > 0) { var next = promptDeck.Dequeue(); usedPrompts.Add(next); return next; }
+        var eligible = ConversationCatalog.Cards.Where(c => adult || !c.Adult).ToArray();
+        var available = eligible.Where(c => !usedPrompts.Contains(c)).ToArray();
+        if (available.Length == 0) { usedPrompts.Clear(); available = eligible; }
+        // Fisher–Yates: every remaining phrase has the same chance, regardless
+        // of its category. A new cryptographic shuffle starts each full cycle.
+        for (var i = available.Length - 1; i > 0; i--)
+        {
+            var j = RandomNumberGenerator.GetInt32(i + 1);
+            (available[i], available[j]) = (available[j], available[i]);
+        }
+        if (available.Length > 1 && available[0] == prompt)
+        {
+            var j = RandomNumberGenerator.GetInt32(1, available.Length);
+            (available[0], available[j]) = (available[j], available[0]);
+        }
+        foreach (var card in available) promptDeck.Enqueue(card);
+        var drawn = promptDeck.Dequeue(); usedPrompts.Add(drawn); return drawn;
     }
     private void RevealIfAllAnswered()
     {
@@ -329,7 +350,7 @@ sealed class Room
             var active = mode == "classic" && (state is "playing" or "reveal") ? players[activeIndex].Id : null;
             return new {
                 code = Code, state, version, serverTime = Now, hostId = HostId, round = mode == "classic" && targetScore == 0 ? Math.Min(round, 3) : round, totalRounds = mode == "classic" && targetScore == 0 ? (int?)3 : null,
-                settings = new { turnSeconds, targetScore, mode, adult },
+                settings = new { turnSeconds, targetScore, mode, adult, maxPlayers },
                 conversation = mode == "conversation" && (state is "playing" or "reveal") ? new { prompt, answered = ratings.ContainsKey(viewerId), ownRating = ratings.GetValueOrDefault(viewerId), responses = players.Where(p => !p.Left).Select(p => new { id = p.Id, answered = ratings.ContainsKey(p.Id), value = state == "reveal" ? ratings.GetValueOrDefault(p.Id) : null }).ToArray() } : null,
                 turnId, countdownEndsAt, revealEndsAt, activePlayerId = active, viewerIsGuesser = viewerId == active,
                 guessesRemaining = 3 - tried.Count, triedNumbers = tried.ToArray(), turnStartedAt,

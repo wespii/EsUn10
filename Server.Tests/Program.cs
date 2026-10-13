@@ -47,6 +47,30 @@ var tests = new Dictionary<string,Action> {
     r.RateConversation("a",5,Turn(r));r.RateConversation("b",7,Turn(r));r.ConversationControl("a",Turn(r),true);r.Rematch("a");r.Configure("a",30,0,"conversation",true);r.SetReady("a");r.SetReady("b");Move(c,r,10,"a","b");
     bool adultSeen=false;for(int i=0;i<ConversationCatalog.Cards.Length;i++){adultSeen|=View(r).GetProperty("conversation").GetProperty("prompt").GetProperty("Adult").GetBoolean();r.RateConversation("a",5,Turn(r));r.RateConversation("b",7,Turn(r));r.ConversationControl("a",Turn(r),false);}Check(adultSeen,"adult enabled includes adult prompts");
 },
+["complete shuffled opinion cycles and rematch continuity"] = () => {
+    var c=new FakeClock();var r=new Room("345678",new("a","Ana",null),c);r.TryAdd(new("b","Bea",null),4);r.Configure("a",30,0,"conversation",true);r.SetReady("a");r.SetReady("b");Move(c,r,10,"a","b");
+    string Phrase()=>View(r).GetProperty("conversation").GetProperty("prompt").GetProperty("Text").GetString()!;
+    var catalog=ConversationCatalog.Cards.Select(card=>card.Text).ToHashSet();string? previous=null;
+    for(int cycle=0;cycle<2;cycle++) {
+        var seen=new HashSet<string>();
+        for(int i=0;i<400;i++) {
+            var phrase=Phrase();Check(phrase!=previous,"no adjacent repeat across cycle boundary");Check(seen.Add(phrase),"each phrase once per cycle");previous=phrase;
+            r.RateConversation("a",5,Turn(r));r.RateConversation("b",7,Turn(r));
+            if(i==99){r.ConversationControl("a",Turn(r),true);r.Rematch("a");r.SetReady("a");r.SetReady("b");Move(c,r,10,"a","b");}
+            else r.ConversationControl("a",Turn(r),false);
+        }
+        Check(seen.SetEquals(catalog),"each cycle includes all 400 phrases");
+    }
+},
+["host capacity, eight players and full opinion reveal"] = () => {
+    var c=new FakeClock();var r=new Room("345678",new("a","Ana",null),c);
+    Check(!r.Configure("a",30,0,"conversation",false,9).Accepted,"hard limit of eight");Check(!r.Configure("a",30,0,"conversation",false,1).Accepted,"minimum two");Check(r.Configure("a",30,0,"conversation",false,8).Accepted,"host expands capacity");
+    var ids=new[]{"a","b","c","d","e","f","g","h"};foreach(var id in ids.Skip(1))Check(r.TryAdd(new(id,id,null),8),"eight members can join");
+    Check(!r.TryAdd(new("ninth","Extra",null),8),"ninth refused");Check(!r.Configure("b",30,0,"conversation",false,8).Accepted,"guest cannot configure");Check(!r.Configure("a",30,0,"conversation",false,7).Accepted,"cannot evict by reducing capacity");
+    foreach(var id in ids)r.SetReady(id);Move(c,r,10,ids);Check(!r.Configure("a",30,0,"conversation",false,8).Accepted,"capacity frozen during play");
+    foreach(var id in ids.Take(7))r.RateConversation(id,5,Turn(r));Check(State(r)=="playing","wait for eighth opinion");r.RateConversation("h",7,Turn(r));Check(State(r)=="reveal","all eight reveal");Check(View(r).GetProperty("conversation").GetProperty("responses").GetArrayLength()==8,"eight results displayed");
+    r.ConversationControl("a",Turn(r),true);r.Rematch("a");Check(View(r).GetProperty("settings").GetProperty("maxPlayers").GetInt32()==8,"capacity retained for rematch");
+},
 ["reconnect, privacy and duplicate attempts"] = () => {
     var (r,c)=Game(); Check(r.TryAdd(new("a","Ana",null),4),"reconnect existing during play");Check(!r.TryAdd(new("x","Extra",null),4),"block new midgame");
     Check(View(r).GetProperty("secretNumber").ValueKind==JsonValueKind.Null,"guesser hidden");

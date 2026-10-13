@@ -28,7 +28,7 @@ sealed class RoomStore
         {
         var room = Get(code);
         if (rooms.Values.Any(r => r != room && r.ContainsPlayer(player.Id))) return null;
-        return room?.TryAdd(player, 4) == true ? room : null;
+        return room?.TryAdd(player, 8) == true ? room : null;
         }
     }
     public Room? SetReady(string code, string id) => Get(code) is { } room && room.SetReady(id) ? room : null;

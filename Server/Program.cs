@@ -249,7 +249,7 @@ app.MapPost("/rooms/{code}/settings", async (string code, RoomSettingsRequest re
     if (player == null) return Results.Unauthorized();
     var room = rooms.Get(code);
     if (room == null || !room.ContainsPlayer(player.Id)) return Results.NotFound();
-    var result = room.Configure(player.Id, request.TurnSeconds, request.TargetScore, request.Mode, request.Adult);
+    var result = room.Configure(player.Id, request.TurnSeconds, request.TargetScore, request.Mode, request.Adult, request.MaxPlayers);
     if (!result.Accepted) return Results.BadRequest(new { error = result.Message });
     return await NotifyRoom(hub, room, player.Id);
 }).RequireRateLimiting("api");
@@ -385,7 +385,7 @@ sealed class GameHub(AuthTokenStore tokens, RoomStore rooms) : Hub
     }
 }
 
-record RoomSettingsRequest(int TurnSeconds, int TargetScore, string Mode = "classic", bool Adult = false);
+record RoomSettingsRequest(int TurnSeconds, int TargetScore, string Mode = "classic", bool Adult = false, int MaxPlayers = 4);
 record ConversationRequest(int? Number, string? TurnId);
 record ConversationControlRequest(string? TurnId, bool Finish);
 record GuessRequest(int Number, string? TurnId, string? RequestId);

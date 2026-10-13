@@ -57,10 +57,12 @@ Máximo 120 peticiones HTTP por minuto por identidad/IP, tres ayudas por turno c
 
 En Ajustes del lobby el anfitrión puede elegir **Opiniones · sin puntos**. Cada persona responde del 1 al 10 a una misma pregunta o pulsa **Paso**. Las respuestas se ocultan en el servidor hasta que todos responden o termina el tiempo configurado. Después hay una pausa sin límite para conversar: el anfitrión elige **Siguiente frase** o **Terminar**. No hay respuesta correcta, puntos ni ganador.
 
-El catálogo contiene las 400 características suministradas en los dos TXT del proyecto: cotidiano, pareja, fiesta, broma, red flags, convivencia, vida digital, dinero y dos categorías +18 opcionales (desactivadas por defecto, para grupos de adultos). La dinámica es «Es un 10, pero…»: dar de 1 (muy mala) a 10 (excelente) a una persona hipotética con esa característica. Se elige una categoría aleatoria y se evitan preguntas repetidas hasta agotar las disponibles. El modo clásico sigue disponible.
+El catálogo contiene las 400 características suministradas en los dos TXT del proyecto: cotidiano, pareja, fiesta, broma, red flags, convivencia, vida digital, dinero y dos categorías +18 opcionales (desactivadas por defecto, para grupos de adultos). La dinámica es «Es un 10, pero…»: dar de 1 (muy mala) a 10 (excelente) a una persona hipotética con esa característica. Se barajan todas las frases habilitadas con Fisher–Yates y aleatoriedad criptográfica, sin prioridad por categoría. Cada frase aparece una vez por ciclo; al agotarlo se baraja de nuevo y se evita repetir la última en el cambio de ciclo. Las revanchas conservan el ciclo actual. El modo clásico sigue disponible.
 
 API: `POST /rooms/{code}/opinion` recibe `{ number: 1..10 | null, turnId }` (null significa pasar); `POST /rooms/{code}/conversation-next` recibe `{ turnId, finish }` y solo admite al anfitrión tras la revelación. Los ajustes incluyen `mode` (`classic` o `conversation`) y `adult`.
 
 Los cambios de estado se envían mediante SignalR como `roomState`, a un grupo privado por mesa y jugador. Se construye cada vista bajo el bloqueo de la mesa para mantener juntas las versiones y ocultar números secretos y respuestas ajenas. El cliente conserva una consulta de recuperación periódica y descarta versiones antiguas.
 
 Los ajustes del lobby se guardan automáticamente al elegir opciones o tras una pausa breve al escribir números. El anfitrión ve el estado de guardado; no puede marcarse listo con ajustes pendientes o inválidos.
+
+El anfitrión elige un límite de 2–8 jugadores (`maxPlayers`, 4 por defecto). No puede reducirlo por debajo de los miembros presentes. El servidor rechaza nuevas entradas al alcanzar el límite, que se conserva en la revancha.
