@@ -102,6 +102,7 @@ app.MapGet("/auth/discord/callback", async (
     context.Session.SetString("discord_id", identity.Id);
     context.Session.SetString("display_name", identity.DisplayName);
     if (identity.AvatarUrl != null) context.Session.SetString("avatar_url", identity.AvatarUrl);
+    else context.Session.Remove("avatar_url");
     if (device != null) devices.Authorize(device, identity);
     return Results.Redirect("/");
 }).RequireRateLimiting("api");
@@ -160,7 +161,7 @@ app.MapGet("/rooms/{code}", (string code, HttpContext context, RoomStore rooms, 
 {
     var player = RequirePlayer(context, tokens);
     if (player == null) return Results.Unauthorized();
-    return rooms.Get(code) is { } room && room.Touch(player.Id)
+    return rooms.Get(code) is { } room && room.RefreshProfile(player)
         ? Results.Ok(room.ToView(player.Id))
         : Results.NotFound();
 }).RequireRateLimiting("api");

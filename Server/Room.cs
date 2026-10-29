@@ -50,11 +50,21 @@ sealed class Room
             return true;
         }
     }
+    public bool RefreshProfile(AuthenticatedPlayer identity)
+    {
+        lock (gate)
+        {
+            var player = players.FirstOrDefault(p => p.Id == identity.Id && !p.Left);
+            if (player == null) return false;
+            if (player.UpdateProfile(identity)) version++;
+            return Touch(identity.Id);
+        }
+    }
     public bool TryAdd(AuthenticatedPlayer player, int max)
     {
         lock (gate)
         {
-            if (ContainsPlayer(player.Id)) return Touch(player.Id);
+            if (ContainsPlayer(player.Id)) return RefreshProfile(player);
             if (state != "lobby" || players.Count >= Math.Min(max, maxPlayers)) return false;
             players.Add(new(player, Now)); LastActivity = Now; TransferHost(); UpdateCountdown(); version++;
             return true;
@@ -368,8 +378,13 @@ sealed class Room
 sealed class RoomPlayer(AuthenticatedPlayer player, DateTimeOffset now)
 {
     public string Id { get; } = player.Id;
-    public string DisplayName { get; } = player.DisplayName;
-    public string? AvatarUrl { get; } = player.AvatarUrl;
+    public string DisplayName { get; private set; } = player.DisplayName;
+    public string? AvatarUrl { get; private set; } = player.AvatarUrl;
+    public bool UpdateProfile(AuthenticatedPlayer identity)
+    {
+        if (DisplayName == identity.DisplayName && AvatarUrl == identity.AvatarUrl) return false;
+        DisplayName = identity.DisplayName; AvatarUrl = identity.AvatarUrl; return true;
+    }
     public bool Ready { get; set; }
     public int Score { get; set; }
     public bool Online { get; set; } = true;

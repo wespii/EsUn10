@@ -40,6 +40,7 @@ sealed class RememberLogin(IConfiguration configuration, IWebHostEnvironment env
             context.Session.SetString("discord_id", ticket.Player.Id);
             context.Session.SetString("display_name", ticket.Player.DisplayName);
             if (ticket.Player.AvatarUrl != null) context.Session.SetString("avatar_url", ticket.Player.AvatarUrl);
+            else context.Session.Remove("avatar_url");
             if (DateTimeOffset.UtcNow - ticket.IssuedAt > TimeSpan.FromDays(1)) Issue(context, ticket.Player);
         }
         catch (Exception ex) when (ex is FormatException or JsonException or ArgumentException) { }

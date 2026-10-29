@@ -12,7 +12,7 @@ sealed class RoomStore
         {
         // Reuse membership instead of creating orphan rooms on repeated clicks.
         var existing = rooms.Values.FirstOrDefault(r => r.ContainsPlayer(host.Id));
-        if (existing != null) { existing.Touch(host.Id); return existing; }
+        if (existing != null) { existing.RefreshProfile(host); return existing; }
         while (true)
         {
             var code = RandomNumberGenerator.GetInt32(100000, 1000000).ToString();

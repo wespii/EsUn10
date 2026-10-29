@@ -71,6 +71,13 @@ var tests = new Dictionary<string,Action> {
     foreach(var id in ids.Take(7))r.RateConversation(id,5,Turn(r));Check(State(r)=="playing","wait for eighth opinion");r.RateConversation("h",7,Turn(r));Check(State(r)=="reveal","all eight reveal");Check(View(r).GetProperty("conversation").GetProperty("responses").GetArrayLength()==8,"eight results displayed");
     r.ConversationControl("a",Turn(r),true);r.Rematch("a");Check(View(r).GetProperty("settings").GetProperty("maxPlayers").GetInt32()==8,"capacity retained for rematch");
 },
+["refreshed Discord profile reaches existing room"] = () => {
+    var (r,c)=Game();var version=r.Version;
+    Check(r.RefreshProfile(new("a","Ana actualizada","https://cdn.discordapp.com/avatars/1/new.png")),"existing profile updated");
+    Check(r.Version>version,"profile change published");Check(View(r,"b").GetProperty("players")[0].GetProperty("avatarUrl").GetString()!.EndsWith("new.png"),"other players receive new avatar");
+    Check(!r.RefreshProfile(new("outsider","Extra",null)),"outsider cannot refresh member");
+    Check(r.RefreshProfile(new("a","Ana",null)),"removed Discord photo accepted");Check(View(r).GetProperty("players")[0].GetProperty("avatarUrl").ValueKind==JsonValueKind.Null,"old avatar cleared");
+},
 ["reconnect, privacy and duplicate attempts"] = () => {
     var (r,c)=Game(); Check(r.TryAdd(new("a","Ana",null),4),"reconnect existing during play");Check(!r.TryAdd(new("x","Extra",null),4),"block new midgame");
     Check(View(r).GetProperty("secretNumber").ValueKind==JsonValueKind.Null,"guesser hidden");
